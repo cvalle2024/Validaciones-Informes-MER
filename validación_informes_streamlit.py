@@ -40,8 +40,8 @@ DOC_MD = r"""
 # 📖 Documentación de validaciones
 
 ## Indicadores y reglas
-- **Numerador > Denominador (TX_PVLS):** Por sexo y edad, `Numerador ≤ Denominador`. Se detectan secciones “Numerador” y “Denominador”.
-- **Denominador > TX_CURR (PVLS vs TX_CURR):** Por **sexo + tipo de población + edad**, `Denominador (PVLS) ≤ TX_CURR`.
+**Numerador > Denominador (TX_PVLS):** Por sexo y edad, `Numerador ≤ Denominador`.Se verifica el valor de cada cela del Denominador y se compara con cada celda del Numerador para verificar que no sea mayor los valores del Numerador, Se detectan secciones “Numerador” y “Denominador”.
+- **Denominador > TX_CURR (PVLS vs TX_CURR):** Por **sexo + tipo de población + edad**, Se verifica las celdas del Denominador TX_PVLS y se compara con las celdas del TX_CURR para validar que las celdas del Denominadpr no sean mayor al TX_CURR `Denominador (PVLS) ≤ TX_CURR`.
 - **TX_CURR ≠ Dispensación_TARV (en hoja TX_CURR):** Dos cuadros en la misma hoja; se comparan por **sexo + edad** (no por población) y se reporta la **Diferencia (TX_CURR − Disp_TARV)** y si **Disp_TARV > TX_CURR**.
 - **CD4 vacío positivo (HTS_TST):** Si `Resultado = Positivo`, **CD4 Basal** no puede estar vacío.
 - **Fecha TARV < Diagnóstico (HTS_TST):** **Fecha inicio TARV** no puede ser anterior a la **Fecha del diagnóstico**.
@@ -1034,3 +1034,4 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
