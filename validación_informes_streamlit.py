@@ -35,6 +35,58 @@ with st.expander("ℹ️ Cómo usar", expanded=False):
         """
     )
 
+# ====== DOCUMENTACIÓN (como expander) ======
+DOC_MD = r"""
+# 📖 Documentación de validaciones
+
+## Indicadores y reglas
+- **Numerador > Denominador (TX_PVLS):** Por sexo y edad, `Numerador ≤ Denominador`. Se detectan secciones “Numerador” y “Denominador”.
+- **Denominador > TX_CURR (PVLS vs TX_CURR):** Por **sexo + tipo de población + edad**, `Denominador (PVLS) ≤ TX_CURR`.
+- **TX_CURR ≠ Dispensación_TARV (en hoja TX_CURR):** Dos cuadros en la misma hoja; se comparan por **sexo + edad** (no por población) y se reporta la **Diferencia (TX_CURR − Disp_TARV)** y si **Disp_TARV > TX_CURR**.
+- **CD4 vacío positivo (HTS_TST):** Si `Resultado = Positivo`, **CD4 Basal** no puede estar vacío.
+- **Fecha TARV < Diagnóstico (HTS_TST):** **Fecha inicio TARV** no puede ser anterior a la **Fecha del diagnóstico**.
+- **Formato fecha diagnóstico (HTS_TST):** Si la fecha viene con `/`, debe cumplir **dd/mm/yyyy** válido (mes ≤ 12).
+
+## Fuentes de “Mes de reporte”
+- **HTS_TST:** desde **Fecha del diagnóstico** (por fila) y se normaliza a `MMM YYYY` (p.ej., `JUL 2025`).
+- **TX_PVLS / TX_CURR:** prioridad **Fecha de reporte** > **Mes de reporte**; si no existen, se usa el fallback de la UI.
+
+## Cómo se leen las tablas
+- Se localizan encabezados con **“Sexo”** (y en su caso **“Tipo de población”**) y **columnas de edad** (contienen “año/ano/65/+”).
+- En **TX_PVLS** se separan dinámicamente las secciones **Numerador** y **Denominador**.
+- En **TX_CURR** se detectan los dos cuadros por rótulos: `TX CURR` y `Dispensación/Entrega TAR(V)`; se suman totales por **(Sexo, Edad)**.
+
+## Métricas
+- Por indicador se acumulan **checks** (comprobaciones) y **errors** (fallos).
+- Se calcula `% Error = errors / checks` global y por combinación **(País, Depto, Sitio, Mes, Indicador)**.
+
+## Exportación a Excel
+- Hoja **Resumen** con total de errores por indicador.
+- Una hoja por **indicador** con todas las filas detectadas.
+- Hojas de **Métricas** (globales y por mes).
+- En cada hoja de errores se **resalta en rojo** la columna crítica (p.ej., “CD4 Basal”, “Fecha inicio TARV”, “Diferencia (TX_CURR - Disp_TARV)”).
+
+## Robustez del parsing
+- Normalización de encabezados a nombres estándar: `Sexo`, `Tipo de población`, `País`, `Departamento`, `Sitio`, `Mes de reporte`, `Fecha de reporte`.
+- Deduplicación de columnas en **HTS_TST** y normalización de `Masculino/Femenino`.
+- Manejo de variantes “Dispensación/Entrega TARV/TAVR” y edades con `+` o “65”.
+
+## Diagnóstico adicional
+- Vista por archivo para **TX_CURR vs Dispensación_TARV** con orden por `|Diferencia|` y descarga **CSV**.
+"""
+
+with st.expander("📖 Documentación (clic para ver)", expanded=False):
+    st.markdown(DOC_MD)
+    st.download_button(
+        "⬇️ Descargar documentación (Markdown)",
+        DOC_MD.encode("utf-8"),
+        file_name="documentacion_validaciones.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+# ====== FIN DOCUMENTACIÓN ======
+
+
 # ============================
 # ------ CARGA DE INPUTS -----
 # ============================
@@ -982,51 +1034,3 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-
-# ======== DOCUMENTACIÓN EN LA APP ========
-DOC_MD = r"""
-# 📖 Documentación de validaciones
-
-## Indicadores y reglas
-- **Numerador > Denominador (TX_PVLS):** Por sexo y edad, Numerador ≤ Denominador. Se lee la sección “Numerador” y “Denominador”.
-- **Denominador > TX_CURR (PVLS vs TX_CURR):** Por sexo+tipo de población+edad, Denominador (PVLS) ≤ TX_CURR.
-- **TX_CURR ≠ Dispensación_TARV (en hoja TX_CURR):** Dos cuadros en la misma hoja; se comparan por sexo+edad (no por población) y se reporta diferencia y si Disp_TARV > TX_CURR.
-- **CD4 vacío positivo (HTS_TST):** Si Resultado=Positivo, CD4 Basal no puede estar vacío.
-- **Fecha TARV < Diagnóstico (HTS_TST):** Fecha inicio TARV no puede ser anterior a la de diagnóstico.
-- **Formato fecha diagnóstico (HTS_TST):** Cuando viene como texto con “/”, debe ser dd/mm/yyyy válido.
-
-## Fuentes de “Mes de reporte”
-- **HTS_TST:** desde **Fecha del diagnóstico** (por fila) formateado `MMM YYYY`.
-- **TX_PVLS / TX_CURR:** prioridad **Fecha de reporte** > **Mes de reporte**; si no existe, fallback.
-
-## Métricas
-- Para cada indicador se acumulan *checks* y *errors*, y se muestra `%Error = errors/checks` global y por (País, Depto, Sitio, Mes).
-
-## Exportación
-- Excel con: **Resumen**, hojas por **indicador**, **Métricas** globales y por mes. La columna crítica se **resalta en rojo**.
-
-## Notas de parsing
-- Normalización de encabezados (Sexo, Tipo de población, País, Departamento, Sitio, Mes/Fecha de reporte).
-- Dedupe de columnas en HTS_TST.
-- Normalización de “Masculino/Femenino”.
-"""
-
-# Añade una pestaña extra con la documentación
-tabs.append("📖 Documentación")
-with tabs[-1]:
-    st.markdown(DOC_MD)
-    st.download_button(
-        "⬇️ Descargar esta documentación (Markdown)",
-        DOC_MD.encode("utf-8"),
-        file_name="documentacion_validaciones.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
-
-
-
-
-
-
-
