@@ -1,5 +1,6 @@
 streamlit
 pandas
+numpy
 xlsxwriter
 openpyxl
 qrcode
@@ -12,4 +13,5 @@ mysql-connector-python
 matplotlib
 seaborn
 plotly
+
 
