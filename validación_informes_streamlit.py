@@ -30,7 +30,7 @@ except Exception:
     _logo_img = None
 
 st.set_page_config(
-    page_title="Validaciones Maestro VIH",
+    page_title="Script para validar indicadores MER",
     page_icon=_logo_img or "✅",   # usa el logo como favicon; si falla, el emoji
     layout="wide",
 )
@@ -42,7 +42,7 @@ if _logo_img:
         st.image(_logo_img, width=64)  # ajusta tamaño si quieres
 else:
     # si no hay logo disponible, muestra el encabezado normal
-    st.title("Validaciones Maestro VIH")
+    st.title("Script para validar indicadores MER")
     st.caption("TX_PVLS / TX_CURR / HTS_TST • Revisión y métricas con filtros instantáneos")
 
 
@@ -1061,4 +1061,5 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
