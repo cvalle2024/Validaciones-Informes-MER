@@ -16,12 +16,6 @@ from openpyxl.utils import get_column_letter
 from pathlib import Path
 
 #st.set_page_config(page_title="Script validar indicadores MER", layout="wide", page_icon="✅")
-import streamlit as st
-from PIL import Image  # pip install pillow
-from pathlib import Path
-from pathlib import Path
-from PIL import Image
-import streamlit as st
 
 LOGO_PATH = Path(__file__).parent / "logo.png"
 logo_img = Image.open(LOGO_PATH)
@@ -1050,6 +1044,7 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
 
