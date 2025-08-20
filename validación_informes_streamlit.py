@@ -19,32 +19,21 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image  # pip install pillow
 from pathlib import Path
+from pathlib import Path
+from PIL import Image
+import streamlit as st
 
-# Ruta al logo en la misma carpeta del script
 LOGO_PATH = Path(__file__).parent / "logo.png"
+logo_img = Image.open(LOGO_PATH)
 
-# Intenta cargar el logo (para usarlo como icono y en el encabezado)
-try:
-    _logo_img = Image.open(LOGO_PATH)
-except Exception:
-    _logo_img = None
+st.set_page_config(page_title="Validaciones Maestro VIH", page_icon=logo_img, layout="wide")
 
-st.set_page_config(
-    page_title="Script para validar indicadores MER",
-    page_icon=_logo_img or "✅",   # usa el logo como favicon; si falla, el emoji
-    layout="wide",
-)
-
-# Encabezado con logo a la izquierda
-if _logo_img:
-    col_logo, col_title = st.columns([1, 9])
-    with col_logo:
-        st.image(_logo_img, width=64)  # ajusta tamaño si quieres
-else:
-    # si no hay logo disponible, muestra el encabezado normal
-    st.title("Script para validar indicadores MER")
+col_logo, col_title = st.columns([1, 9])
+with col_logo:
+    st.image(logo_img, width=64)
+with col_title:
+    st.title("Validaciones Maestro VIH")
     st.caption("TX_PVLS / TX_CURR / HTS_TST • Revisión y métricas con filtros instantáneos")
-
 
 
 
@@ -1061,5 +1050,6 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
