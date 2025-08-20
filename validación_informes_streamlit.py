@@ -26,7 +26,6 @@ col_logo, col_title = st.columns([1, 9])
 with col_logo:
     st.image(logo_img, width=100)
 
-
 # ============================
 # --------- UI HEADER --------
 # ============================
@@ -91,7 +90,6 @@ with st.expander("📖 Documentación (clic para ver)", expanded=False):
         use_container_width=True,
     )
 # ====== FIN DOCUMENTACIÓN ======
-
 
 # ============================
 # ------ CARGA DE INPUTS -----
@@ -837,7 +835,9 @@ for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq"]:
             if col not in df.columns:
                 st.session_state[dfname][col] = ""
 
-# Resumen de conteos
+# ─────────────────────────────────────────────────────────────
+# 📌 Resumen (conteo de filas de error)  +  Filtros  +  Tarjetas
+# ─────────────────────────────────────────────────────────────
 st.subheader("📌 Resumen (conteo de filas de error)")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Numerador > Denominador", len(st.session_state.df_num))
@@ -914,17 +914,12 @@ def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
         df_group = pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte","Indicador","Errores","Chequeos","% Error"])
     return df_global, df_group
 
-st.subheader("📈 Métricas de calidad (adaptadas al filtro)")
 df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio)
 
-gc1, gc2 = st.columns([1.2, 2])
-with gc1:
-    st.markdown("**Métricas – Selección actual**")
-    show_df_or_note(df_metricas_global_sel, "— Sin métricas para la selección —", height=260)
-with gc2:
-    st.markdown("**Desglose por Mes – Selección**")
-    show_df_or_note(df_metricas_por_mes_sel, "— Sin desglose para la selección —", height=260)
-
+# ─────────────────────────────────────────────────────────────
+# 🧮 Indicadores – % de error (selección)  [BAJO EL RESUMEN]
+# + selector de indicador con detalle (sin pestañas)
+# ─────────────────────────────────────────────────────────────
 st.markdown("**Indicadores – % de error (selección)**")
 cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF]
 cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
@@ -935,55 +930,31 @@ for col, key in zip(cols, cards):
     v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
     col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} err/cheq")
 
-# Pestañas (sin cajas "empty")
-tabs = st.tabs([
-    "Numerador > Denominador",
-    "Denominador > TX_CURR",
-    "CD4 vacío positivo",
-    "Fecha TARV < Diagnóstico",
-    "Formato fecha diagnóstico",
-    "TX_CURR ≠ Dispensación_TARV",
-])
-with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —")
-with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —")
-with tabs[2]: show_df_or_note(df_cd4_f,   "— Sin positivos con CD4 vacío —")
-with tabs[3]: show_df_or_note(df_tarv_f,  "— Sin casos TARV < Diagnóstico —")
-with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —")
-with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —")
+# Selector de indicador para mostrar detalle (reemplaza las pestañas)
+st.markdown("### 🔎 Detalle del indicador seleccionado")
+opciones_ind = {
+    "Numerador > Denominador": ("num", df_num_f),
+    "Denominador > TX_CURR":    ("den_gt_curr", df_txpv_f),
+    "CD4 vacío positivo":       ("cd4", df_cd4_f),
+    "Fecha TARV < Diagnóstico": ("tarv", df_tarv_f),
+    "Formato fecha diagnóstico":("fdiag", df_fdiag_f),
+    "TX_CURR ≠ Dispensación_TARV": ("currq", df_currq_f),
+}
+sel_ind = st.selectbox("Ver detalle de", list(opciones_ind.keys()), index=0)
+_, df_detalle = opciones_ind[sel_ind]
+show_df_or_note(df_detalle, f"— Sin filas para «{sel_ind}» —", height=320)
 
-# Diagnóstico por archivo
-st.subheader("🔍 Diagnóstico TX_CURR vs Dispensación_TARV por archivo")
-if st.session_state.currq_debug:
-    archs = sorted(st.session_state.currq_debug.keys())
-    col_d1, col_d2 = st.columns([2, 1])
-    with col_d1:
-        sel_arch = st.selectbox("Archivo", archs, index=0)
-    with col_d2:
-        ordenar_por_abs = st.checkbox("Ordenar por |Diferencia| desc.", value=True)
-
-    df_dbg = st.session_state.currq_debug.get(sel_arch, pd.DataFrame()).copy()
-    if not df_dbg.empty:
-        if ordenar_por_abs:
-            df_dbg["abs_diff"] = df_dbg["Diferencia"].abs()
-            df_dbg = df_dbg.sort_values(["abs_diff","Sexo","Rango de edad"], ascending=[False, True, True]).drop(columns=["abs_diff"])
-        sexo_opts = ["Todos"] + sorted(df_dbg["Sexo"].dropna().unique().tolist())
-        sel_sexo = st.selectbox("Filtrar por Sexo", sexo_opts, index=0)
-        if sel_sexo != "Todos":
-            df_dbg = df_dbg[df_dbg["Sexo"] == sel_sexo]
-
-        show_df_or_note(df_dbg, "— Sin datos de diagnóstico para este archivo —", height=320)
-        if not df_dbg.empty:
-            csv = df_dbg.to_csv(index=False).encode("utf-8-sig")
-            st.download_button("⬇️ Descargar diagnóstico (CSV)", data=csv,
-                               file_name=f"DIAGNOSTICO_TX_CURR_{sel_arch}.csv",
-                               mime="text/csv", use_container_width=True)
-            modo = getattr(df_dbg, "attrs", {}).get("modo", "")
-            if modo:
-                st.caption(f"Modo de parsing para **{sel_arch}**: **{modo}**")
-    else:
-        st.caption("— Sin datos de diagnóstico —")
-else:
-    st.info("Procesa archivos para habilitar el diagnóstico TX_CURR.")
+# ─────────────────────────────────────────────────────────────
+# 📈 Métricas de calidad (debajo del detalle)
+# ─────────────────────────────────────────────────────────────
+st.subheader("📈 Métricas de calidad (adaptadas al filtro)")
+gc1, gc2 = st.columns([1.2, 2])
+with gc1:
+    st.markdown("**Métricas – Selección actual**")
+    show_df_or_note(df_metricas_global_sel, "— Sin métricas para la selección —", height=260)
+with gc2:
+    st.markdown("**Desglose por Mes – Selección**")
+    show_df_or_note(df_metricas_por_mes_sel, "— Sin desglose para la selección —", height=260)
 
 # ============================
 # ---------- DESCARGA --------
@@ -1040,10 +1011,3 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-
-
-
-
-
-
