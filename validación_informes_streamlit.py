@@ -25,11 +25,11 @@ st.set_page_config(page_title="Validaciones Maestro VIH", page_icon=logo_img, la
 col_logo, col_title = st.columns([1, 9])
 with col_logo:
     st.image(logo_img, width=100)
-with col_title:
+'''with col_title:
     st.title("Validaciones Maestro VIH")
     st.caption("TX_PVLS / TX_CURR / HTS_TST • Revisión y métricas con filtros instantáneos")
 
-
+'''
 
 # ============================
 # --------- UI HEADER --------
@@ -1044,6 +1044,7 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
 
