@@ -1,0 +1,9 @@
+streamlit
+pandas
+xlsxwriter
+qrcode
+Pillow
+gspread
+oauth2client
+chardet
+mysql-connector-python
