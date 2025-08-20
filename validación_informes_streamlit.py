@@ -984,4 +984,47 @@ with cdl2:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 
+# ======== DOCUMENTACIÓN EN LA APP ========
+DOC_MD = r"""
+# 📖 Documentación de validaciones
+
+## Indicadores y reglas
+- **Numerador > Denominador (TX_PVLS):** Por sexo y edad, Numerador ≤ Denominador. Se lee la sección “Numerador” y “Denominador”.
+- **Denominador > TX_CURR (PVLS vs TX_CURR):** Por sexo+tipo de población+edad, Denominador (PVLS) ≤ TX_CURR.
+- **TX_CURR ≠ Dispensación_TARV (en hoja TX_CURR):** Dos cuadros en la misma hoja; se comparan por sexo+edad (no por población) y se reporta diferencia y si Disp_TARV > TX_CURR.
+- **CD4 vacío positivo (HTS_TST):** Si Resultado=Positivo, CD4 Basal no puede estar vacío.
+- **Fecha TARV < Diagnóstico (HTS_TST):** Fecha inicio TARV no puede ser anterior a la de diagnóstico.
+- **Formato fecha diagnóstico (HTS_TST):** Cuando viene como texto con “/”, debe ser dd/mm/yyyy válido.
+
+## Fuentes de “Mes de reporte”
+- **HTS_TST:** desde **Fecha del diagnóstico** (por fila) formateado `MMM YYYY`.
+- **TX_PVLS / TX_CURR:** prioridad **Fecha de reporte** > **Mes de reporte**; si no existe, fallback.
+
+## Métricas
+- Para cada indicador se acumulan *checks* y *errors*, y se muestra `%Error = errors/checks` global y por (País, Depto, Sitio, Mes).
+
+## Exportación
+- Excel con: **Resumen**, hojas por **indicador**, **Métricas** globales y por mes. La columna crítica se **resalta en rojo**.
+
+## Notas de parsing
+- Normalización de encabezados (Sexo, Tipo de población, País, Departamento, Sitio, Mes/Fecha de reporte).
+- Dedupe de columnas en HTS_TST.
+- Normalización de “Masculino/Femenino”.
+"""
+
+# Añade una pestaña extra con la documentación
+tabs.append("📖 Documentación")
+with tabs[-1]:
+    st.markdown(DOC_MD)
+    st.download_button(
+        "⬇️ Descargar esta documentación (Markdown)",
+        DOC_MD.encode("utf-8"),
+        file_name="documentacion_validaciones.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+
+
+
+
 
