@@ -19,7 +19,7 @@ st.set_page_config(page_title="Script validar indicadores MER", layout="wide", p
 # ============================
 # --------- UI HEADER --------
 # ============================
-st.title("✅ Validaciones Maestro VIH")
+st.title("✅ Script de validación de indicadores MER (VIHCA)")
 st.caption(
     "TX_PVLS / TX_CURR / HTS_TST • Revisión y métricas con filtros instantáneos "
     "• Comparación TX_CURR vs Dispensación_TARV por Sexo y Rango de edad"
@@ -982,3 +982,4 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
