@@ -98,11 +98,6 @@ DOC_MD = r"""
 - Hojas de **Métricas** (globales y por mes).
 - En cada hoja de errores se **resalta en rojo** la columna crítica (p.ej., “CD4 Basal”, “Fecha inicio TARV”, “Diferencia (TX_CURR - Disp_TARV)”).
 
-## Robustez del parsing
-- Normalización de encabezados a nombres estándar: `Sexo`, `Tipo de población`, `País`, `Departamento`, `Sitio`, `Mes de reporte`, `Fecha de reporte`.
-- Deduplicación de columnas en **HTS_TST** y normalización de `Masculino/Femenino`.
-- Manejo de variantes “Dispensación/Entrega TARV/TAVR” y edades con `+` o “65”.
-
 ## Diagnóstico adicional
 - Vista por archivo para **TX_CURR vs Dispensación_TARV** con orden por `|Diferencia|` y descarga **CSV**.
 """
@@ -1066,3 +1061,4 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
