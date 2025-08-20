@@ -751,7 +751,7 @@ if procesar:
             procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo, errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag)
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq, debug_store=st.session_state.currq_debug)
         except Exception as e:
-            st.warning(f"⚠️ Este error es por el npmbre del campo que no es igual {nombre_archivo}: {e}")
+            st.warning(f"⚠️ Este error es por el nombre del campo que no es igual[ {nombre_archivo}: {e}")
         progreso.progress(idx/total, text=f"Procesando {idx} de {total}…")
 
     # Guardar DataFrames en sesión
@@ -982,5 +982,6 @@ with cdl2:
     st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
         file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
