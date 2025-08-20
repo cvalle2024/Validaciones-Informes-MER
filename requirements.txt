@@ -1,9 +1,14 @@
 streamlit
 pandas
 xlsxwriter
+numpy
+openpyxl
 qrcode
+xlrd
 Pillow
 gspread
 oauth2client
 chardet
 mysql-connector-python
+seaborn
+plotly
