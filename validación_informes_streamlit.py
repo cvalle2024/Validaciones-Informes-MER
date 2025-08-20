@@ -35,10 +35,6 @@ with st.expander("ℹ️ Cómo usar", expanded=False):
         """
     )
 
-with st.expander("📖 Documentación (clic para ver)", expanded=False):
-    st.markdown(DOC_MD)
-
-
 # ============================
 # ------ CARGA DE INPUTS -----
 # ============================
@@ -1027,6 +1023,7 @@ with tabs[-1]:
         mime="text/markdown",
         use_container_width=True,
     )
+
 
 
 
