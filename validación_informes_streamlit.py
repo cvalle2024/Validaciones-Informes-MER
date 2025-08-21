@@ -1034,11 +1034,12 @@ with dl:
     cdl1, cdl2 = st.columns(2)
     with cdl1:
         st.download_button("⬇️ Descargar Excel (COMPLETO)", data=bytes_excel_full,
-            file_name=f"VALIDACIONES_MAESTRO_VIH_COMPLETO_{pais}_{fecha_str}.xlsx",
+            file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     with cdl2:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
-            file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{pais}_{fecha_str}.xlsx",
+            file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
