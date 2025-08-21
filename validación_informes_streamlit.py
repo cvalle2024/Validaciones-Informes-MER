@@ -24,7 +24,7 @@ st.set_page_config(page_title="Validaciones Maestro VIH", page_icon=logo_img, la
 
 c_logo, c_title = st.columns([1, 9])
 with c_logo:
-    st.image(logo_img, width=90)
+    st.image(logo_img, width=450)
 with c_title:
     st.title("✅ Script de validación de indicadores MER (VIHCA)")
     st.caption("TX_PVLS / TX_CURR / HTS_TST • Reglas por Sexo, Población, Rango de edad y campos clave")
@@ -1033,3 +1033,4 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"VALIDACIONES_DE_INDICADORES_MER_{pais} _ {fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
