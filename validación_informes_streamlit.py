@@ -866,7 +866,7 @@ df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selecti
 # ─────────────────────────────────────────────────────────────
 res = st.container(border=True)
 with res:
-    st.subheader("📌 Resumen (conteo de filas de error)")
+    st.subheader("⚫ *Resumen de errores por indicador*")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     c1.metric("Numerador > Denominador", len(df_num_f))
     c2.metric("Denominador > TX_CURR", len(df_txpv_f))
@@ -881,7 +881,7 @@ with res:
 # ─────────────────────────────────────────────────────────────
 sel = st.container(border=True)
 with sel:
-    st.subheader("📊 Indicadores – % de error (selección)")
+    st.subheader("📊 *Porcentaje de errores por indicador*")
     cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO]
     cols = st.columns(len(cards))
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
@@ -895,7 +895,7 @@ with sel:
 # ─────────────────────────────────────────────────────────────
 det = st.container(border=True)
 with det:
-    st.subheader("🔎 Detalle por indicador")
+    st.subheader("🔎 *Detalle por indicador*")
     tabs = st.tabs([
         "Numerador > Denominador",
         "Denominador > TX_CURR",
@@ -918,7 +918,7 @@ with det:
 # ─────────────────────────────────────────────────────────────
 met = st.container(border=True)
 with met:
-    st.subheader("📈 Métricas de calidad (adaptadas al filtro)")
+    st.subheader("📈 *Resumen de porcentajes de error por indicador y desglose por país*")
     gc1, gc2 = st.columns([1.2, 2])
     with gc1:
         st.markdown("**Métricas – Selección actual**")
