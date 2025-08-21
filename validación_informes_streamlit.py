@@ -14,7 +14,6 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 from pathlib import Path
-from contextlib import contextmanager
 
 # ============================
 # --------- CONFIG UI --------
@@ -23,12 +22,12 @@ LOGO_PATH = Path(__file__).parent / "logo.png"
 logo_img = Image.open(LOGO_PATH)
 st.set_page_config(page_title="Validaciones Maestro VIH", page_icon=logo_img, layout="wide")
 
-col_logo, col_title = st.columns([1, 9])
-with col_logo:
-    st.image(logo_img, width=100)
-
-st.title("✅ Script de validación de indicadores MER (VIHCA)")
-st.caption("TX_PVLS / TX_CURR / HTS_TST • Reglas de consistencia por Sexo, Población y Rango de edad")
+c_logo, c_title = st.columns([1, 9])
+with c_logo:
+    st.image(logo_img, width=90)
+with c_title:
+    st.title("✅ Script de validación de indicadores MER (VIHCA)")
+    st.caption("TX_PVLS / TX_CURR / HTS_TST • Reglas por Sexo, Población, Rango de edad y campos clave")
 
 with st.expander("ℹ️ Cómo usar", expanded=False):
     st.markdown(
@@ -40,91 +39,6 @@ with st.expander("ℹ️ Cómo usar", expanded=False):
         """
     )
 
-# ====== ESTILOS Y TARJETAS (cajas) ======
-CARD_CSS = """
-<style>
-.card {
-  background: var(--background-color, #0e1117);
-  border: 1px solid rgba(128,128,128,0.25);
-  border-radius: 16px;
-  padding: 18px 18px 12px 18px;
-  margin: 14px 0 18px 0;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-}
-@media (prefers-color-scheme: light) {
-  .card {
-    background: #ffffff;
-    border: 1px solid rgba(0,0,0,0.08);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.06);
-  }
-}
-.card-header { display:flex; align-items:center; gap:10px; margin-bottom: 12px; }
-.card-title  { font-weight:700; font-size:1.15rem; margin:0; letter-spacing:.2px; }
-.card-badge  { font-size:.80rem; background:rgba(127,127,127,.15); border:1px solid rgba(127,127,127,.25);
-               padding:2px 8px; border-radius:999px; }
-.card .stMetric { text-align:center; }
-</style>
-"""
-st.markdown(CARD_CSS, unsafe_allow_html=True)
-
-@contextmanager
-def card(title: str, icon: str = "📦", badge: Optional[str] = None):
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    header_html = f"""
-    <div class='card-header'>
-      <div style="font-size:1.2rem">{icon}</div>
-      <div class='card-title'>{title}</div>
-      {f"<div class='card-badge'>{badge}</div>" if badge else ""}
-    </div>
-    """
-    st.markdown(header_html, unsafe_allow_html=True)
-    try:
-        with st.container():
-            yield
-    finally:
-        st.markdown("</div>", unsafe_allow_html=True)
-
-# ====== DOCUMENTACIÓN (como expander) ======
-DOC_MD = r"""
-# 📖 Documentación de validaciones
-
-## Indicadores y reglas
-- **Numerador > Denominador (TX_PVLS):** Por sexo y edad, `Numerador ≤ Denominador`.
-- **Denominador > TX_CURR (PVLS vs TX_CURR):** Por **sexo + tipo de población + edad**, `Denominador (PVLS) ≤ TX_CURR`.
-- **TX_CURR ≠ Dispensación_TARV (TX_CURR):** Comparación de dos cuadros por **sexo + edad**.
-- **CD4 vacío positivo (HTS_TST):** Si `Resultado = Positivo`, **CD4 Basal** no puede estar vacío.
-- **Fecha TARV < Diagnóstico (HTS_TST):** **Fecha inicio TARV** no puede ser anterior a la **Fecha del diagnóstico**.
-- **Formato fecha diagnóstico (HTS_TST):** Si la fecha viene con `/`, debe cumplir **dd/mm/yyyy**.
-- **ID (expediente) duplicado (HTS_TST):** Detecta duplicados en la columna **Id** o **Número de expediente**.
-
-## Fuentes de “Mes de reporte”
-- **HTS_TST:** desde **Fecha del diagnóstico** (por fila) → `MMM YYYY`.
-- **TX_PVLS / TX_CURR:** prioridad **Fecha de reporte** > **Mes de reporte**; si no existen, se usa el fallback de la UI.
-
-## Métricas
-- Por indicador se acumulan **checks** y **errors**.
-- `% Error = errors / checks` global y por combinación **(País, Depto, Sitio, Mes, Indicador)**.
-
-## Exportación a Excel
-- Hoja **Resumen** con total de errores por indicador.
-- Una hoja por **indicador** con las filas detectadas.
-- Hojas de **Métricas** (globales y por mes).
-- En hojas de errores se **resalta en rojo** la columna crítica.
-"""
-with st.expander("📖 Documentación (clic para ver)", expanded=False):
-    st.markdown(DOC_MD)
-    st.download_button(
-        "⬇️ Descargar documentación (Markdown)",
-        DOC_MD.encode("utf-8"),
-        file_name="documentacion_validaciones.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
-# ====== FIN DOCUMENTACIÓN ======
-
-# ============================
-# ------ CARGA DE INPUTS -----
-# ============================
 col_u1, col_u2 = st.columns([3, 2])
 with col_u1:
     subida_multiple = st.file_uploader(
@@ -141,38 +55,37 @@ procesar = st.button("▶️ Procesar", use_container_width=True)
 # ============================
 # ---- ESTADO (CACHE/STORE) --
 # ============================
+def _ss_default(key, val):
+    if key not in st.session_state: st.session_state[key] = val
+
 for key, val in {
     "processed": False,
-    "df_num": pd.DataFrame(),
-    "df_txpv": pd.DataFrame(),
-    "df_cd4": pd.DataFrame(),
-    "df_tarv": pd.DataFrame(),
-    "df_fdiag": pd.DataFrame(),
-    "df_currq": pd.DataFrame(),   # TX_CURR vs Dispensación_TARV
-    "df_iddup": pd.DataFrame(),   # NUEVO: IDs duplicados en HTS_TST
+    "df_num": pd.DataFrame(),      # Numerador > Denominador
+    "df_txpv": pd.DataFrame(),     # Denominador > TX_CURR
+    "df_cd4": pd.DataFrame(),      # CD4 vacío positivo
+    "df_tarv": pd.DataFrame(),     # TARV < Diagnóstico
+    "df_fdiag": pd.DataFrame(),    # Formato fecha diagnóstico
+    "df_currq": pd.DataFrame(),    # TX_CURR ≠ Dispensación_TARV
+    "df_iddup": pd.DataFrame(),    # ID duplicado (HTS_TST)
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
-    # catálogo maestro de ubicaciones
-    "dim_locs": set(),  # set de tuplas (País, Departamento, Sitio)
-    "dim_df": pd.DataFrame(columns=["País", "Departamento", "Sitio"]),
-    # selección de filtros
-    "sel_pais": "Todos",
-    "sel_depto": "Todos",
-    "sel_sitio": "Todos",
 }.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+    _ss_default(key, val)
+
+_ss_default("sel_pais", "Todos")
+_ss_default("sel_depto", "Todos")
+_ss_default("sel_sitio", "Todos")
 
 # ============================
 # ----- CONSTANTES / HELPERS -
 # ============================
-IND_NUM_GT_DEN     = "num_gt_den"
-IND_DEN_GT_CURR    = "den_gt_curr"
-IND_CD4_MISSING    = "cd4_missing"
-IND_TARV_LT_DIAG   = "tarv_lt_diag"
-IND_DIAG_BAD_FMT   = "diag_bad_format"
-IND_CURR_Q1Q2_DIFF = "curr_q1q2_diff"  # TX_CURR ≠ Dispensación_TARV
-IND_ID_DUPLICADO   = "id_duplicado"    # NUEVO
+IND_NUM_GT_DEN      = "num_gt_den"
+IND_DEN_GT_CURR     = "den_gt_curr"
+IND_CD4_MISSING     = "cd4_missing"
+IND_TARV_LT_DIAG    = "tarv_lt_diag"
+IND_DIAG_BAD_FMT    = "diag_bad_format"
+IND_CURR_Q1Q2_DIFF  = "curr_q1q2_diff"    # TX_CURR ≠ Dispensación_TARV
+IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
 
 DISPLAY_NAMES = {
     IND_NUM_GT_DEN:      "Numerador > Denominador",
@@ -242,6 +155,9 @@ def inferir_pais_mes(path_rel: str, default_pais: str, default_mes: str):
     partes = [p for p in ruta.split("/") if p.strip().lower() not in RUIDO_DIRS]
     if partes and partes[-1].lower().endswith(".xlsx"): partes = partes[:-1]
     pais = partes[-2].strip() if len(partes) >= 2 else default_pais
+    # Evita meses como país
+    if any(tok in MESES for tok in re.split(r"[_\-\s/\.]+", _norm(pais))):
+        pais = default_pais
     pais = pais or default_pais
     mes = None
     for seg in reversed(partes):
@@ -288,7 +204,8 @@ def _rename_standard_columns(df: pd.DataFrame) -> pd.DataFrame:
     mapping: Dict[str, str] = {}
     for c in df.columns:
         cn = _norm(c)
-        if not cn: continue
+        if not cn:
+            continue
         if "sexo" in cn or "genero" in cn or "género" in cn:
             mapping[c] = "Sexo"
         elif ("tipo" in cn and "pobl" in cn) or "poblacion clave" in cn or "población clave" in cn:
@@ -337,17 +254,6 @@ def show_df_or_note(df, note="— Sin filas para mostrar —", height=300):
         st.caption(note); return False
     st.dataframe(df, use_container_width=True, height=height); return True
 
-# ---------- Catálogo maestro de ubicaciones ----------
-def _canon_txt(x: str) -> str:
-    return (str(x).strip() if x is not None else "")
-
-def _canon_triplet(pais: str, depto: str, sitio: str) -> tuple:
-    p = _canon_txt(pais); d = _canon_txt(depto); s = _canon_txt(sitio)
-    return (p, d, s)
-
-def register_dim(pais: str, depto: str, sitio: str):
-    st.session_state.dim_locs.add(_canon_triplet(pais, depto, sitio))
-
 # ============================
 # ------- VALIDACIONES -------
 # ============================
@@ -385,7 +291,7 @@ def procesar_tx_pvls_y_curr(
     col_depto  = buscar_columna_multi(df_data.columns, "departamento") or buscar_columna_multi(df_data.columns, "depto") or buscar_columna_multi(df_data.columns, "provincia")
     col_sitio  = buscar_columna_multi(df_data.columns, "servicio", "salud") or buscar_columna_multi(df_data.columns, "sitio") or buscar_columna_multi(df_data.columns, "clinica")
 
-    # >>> Fecha/Mes de reporte
+    # Fecha/Mes de reporte (prioridad)
     col_fecha_rep = buscar_columna_multi(df_data.columns, "fecha", "reporte")
     col_mesrep    = buscar_columna_multi(df_data.columns, "mes", "reporte")
     def _ctx(row):
@@ -394,11 +300,11 @@ def procesar_tx_pvls_y_curr(
         s = str(row.get(col_sitio)) if col_sitio else ""
         raw_mes = row.get(col_fecha_rep) if col_fecha_rep else (row.get(col_mesrep) if col_mesrep else None)
         m = month_label_from_value(raw_mes) or month_label_from_value(mes_inferido)
-        return (p if str(p).strip() else pais_inferido,
-                d if str(d).strip() else "",
-                s if str(s).strip() else "",
-                m if str(m).strip() else month_label_from_value(mes_inferido))
-    # <<<
+        p = p if str(p).strip() else pais_inferido
+        d = d if str(d).strip() else ""
+        s = s if str(s).strip() else ""
+        m = m if str(m).strip() else month_label_from_value(mes_inferido)
+        return p, d, s, m
 
     fila_base_num = idx_header + 3 + idx_num + 1
 
@@ -412,7 +318,6 @@ def procesar_tx_pvls_y_curr(
         if row_den.empty: continue
         row_den = row_den.iloc[0]
         pais_row, depto_row, sitio_row, mes_rep = _ctx(row_num)
-        register_dim(pais_row, depto_row, sito_row:=(sitio_row))
 
         for col in columnas_edad:
             val_num = numeros_seguro(row_num.get(col))
@@ -448,8 +353,6 @@ def procesar_tx_pvls_y_curr(
             row_curr = row_curr.iloc[0]
 
             pais_row, depto_row, sitio_row, mes_rep = _ctx(row_den)
-            register_dim(pais_row, depto_row, sitio_row)
-
             for col in columnas_edad:
                 val_den = numeros_seguro(row_den.get(col))
                 val_curr = numeros_seguro(row_curr.get(col))
@@ -465,157 +368,7 @@ def procesar_tx_pvls_y_curr(
                             "Fila Excel": int(fila_base_excel_den + i), "Columna Excel": get_column_letter(col_idx + 1)
                         })
 
-def procesar_hts_tst(
-    xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
-    errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup
-):
-    if "HTS_TST" not in xl.sheet_names:
-        return
-
-    df_raw = xl.parse("HTS_TST", header=None)
-    idx_hts = encontrar_fila_encabezado(df_raw, ["Resultado", "CD4"])
-    if idx_hts is None:
-        return
-
-    df_data, _ = normalizar_tabla_por_encabezado(df_raw, idx_hts)
-    df_data.columns = _dedupe_columns(df_data.columns)
-    df_data = _rename_standard_columns(df_data)
-
-    col_resultado = _first_col(df_data, "resultado")
-    col_cd4       = _first_col(df_data, "cd4")
-    col_tarv      = _first_col(df_data, "inicio", "tar")
-    col_diag      = _first_col(df_data, "fecha", "diagn")  # mes de reporte
-    col_sitio     = _first_col(df_data, "servicio", "salud") or _first_col(df_data, "sitio") or _first_col(df_data, "clinica")
-    col_pais      = _first_col(df_data, "pais")
-    col_depto     = _first_col(df_data, "departamento") or _first_col(df_data, "depto") or _first_col(df_data, "provincia")
-
-    if not all([col_resultado, col_cd4, col_diag]):
-        return
-
-    fila_base_hts = idx_hts + 3
-    for i, row in df_data.iterrows():
-        resultado  = str(_coerce_scalar(row.get(col_resultado))).strip().lower()
-        cd4        = _coerce_scalar(row.get(col_cd4))
-        fecha_diag = _coerce_scalar(row.get(col_diag))
-        fecha_tarv = _coerce_scalar(row.get(col_tarv)) if col_tarv else None
-        sitio      = _coerce_scalar(row.get(col_sitio)) if col_sitio else ""
-        pais_row   = _coerce_scalar(row.get(col_pais))  if col_pais else pais_inferido
-        depto_row  = _coerce_scalar(row.get(col_depto)) if col_depto else ""
-
-        mes_rep    = month_label_from_value(fecha_diag) or month_label_from_value(mes_inferido)
-
-        pais_row   = str(pais_row).strip() or pais_inferido
-        depto_row  = str(depto_row).strip()
-        sitio_row  = str(sitio).strip()
-        mes_rep    = str(mes_rep).strip() or month_label_from_value(mes_inferido)
-
-        register_dim(pais_row, depto_row, sitio_row)
-
-        # CD4 vacío cuando Resultado = Positivo
-        if resultado == "positivo":
-            _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
-            if pd.isna(cd4) or str(cd4).strip() == "":
-                _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
-                errores_cd4.append({
-                    "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
-                    "Archivo": nombre_archivo, "Resultado": "Positivo", "CD4 Basal": "",
-                    "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_cd4
-                })
-
-        # Fecha TARV < Diagnóstico
-        if pd.notna(fecha_diag) and pd.notna(fecha_tarv) and str(fecha_tarv).strip():
-            try:
-                fd = pd.to_datetime(fecha_diag, dayfirst=True, errors="coerce")
-                ft = pd.to_datetime(fecha_tarv, dayfirst=True, errors="coerce")
-                if pd.notna(fd) and pd.notna(ft):
-                    _add_metric(IND_TARV_LT_DIAG, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
-                    if ft < fd:
-                        _add_metric(IND_TARV_LT_DIAG, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
-                        errores_fecha_tarv.append({
-                            "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
-                            "Archivo": nombre_archivo, "Resultado": "Positivo" if resultado == "positivo" else "",
-                            "Fecha diagnóstico": fd.date(), "Fecha inicio TARV": ft.date(),
-                            "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_tarv
-                        })
-            except Exception:
-                pass
-
-        # Formato de Fecha Diagnóstico (dd/mm/YYYY si trae '/')
-        try:
-            fecha_texto = str(fecha_diag).strip()
-            if fecha_texto and "/" in fecha_texto:
-                _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
-                partes = fecha_texto.split("/")
-                if len(partes) == 3:
-                    dia, mes_, anio = partes
-                    if int(mes_) > 12: raise ValueError
-                    datetime.strptime(fecha_texto, "%d/%m/%Y")
-        except Exception:
-            _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
-            errores_formato_fecha_diag.append({
-                "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
-                "Archivo": nombre_archivo,
-                "Fecha del diagnóstico de la prueba": fecha_diag,
-                "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_diag
-            })
-
-    # ===========================
-    # NUEVO: Duplicados de ID (Número de expediente)
-    # ===========================
-    col_id = (_first_col(df_data, "id", "expediente") or
-              _first_col(df_data, "numero", "expediente") or
-              _first_col(df_data, "número", "expediente") or
-              _first_col(df_data, "id"))
-    if col_id:
-        try:
-            col_id_idx = list(df_data.columns).index(col_id)
-        except ValueError:
-            col_id_idx = None
-
-        ids_raw = df_data[col_id].astype(str).str.strip()
-        mask_non_empty = ids_raw.replace({"nan": "", "NaN": ""}).astype(bool)
-        vc = ids_raw[mask_non_empty].value_counts()
-        duplicados = vc[vc > 1]
-
-        checks = int(mask_non_empty.sum())
-        errs = int((duplicados - 1).sum()) if not duplicados.empty else 0
-        _add_metric(IND_ID_DUPLICADO, pais_inferido, month_label_from_value(mes_inferido), checks_add=checks, errors_add=errs)
-
-        if not duplicados.empty:
-            for id_val, count in duplicados.items():
-                idxs = df_data.index[ids_raw == id_val].tolist()
-                r0 = df_data.loc[idxs[0]]
-
-                pais_row  = str(_coerce_scalar(r0.get(col_pais)))  if col_pais  else pais_inferido
-                depto_row = str(_coerce_scalar(r0.get(col_depto))) if col_depto else ""
-                sitio_row = str(_coerce_scalar(r0.get(col_sitio)))  if col_sitio  else ""
-                mes_rep   = month_label_from_value(_coerce_scalar(r0.get(col_diag))) or month_label_from_value(mes_inferido)
-
-                pais_row  = pais_row.strip() or pais_inferido
-                depto_row = depto_row.strip()
-                sitio_row = sitio_row.strip()
-                mes_rep   = mes_rep.strip() or month_label_from_value(mes_inferido)
-
-                register_dim(pais_row, depto_row, sitio_row)
-
-                filas_excel = [int(idx_hts + 3 + i) for i in idxs]  # misma base que HTS
-                col_letter = get_column_letter(col_id_idx + 1) if col_id_idx is not None else col_id
-
-                _add_metric(IND_ID_DUPLICADO, pais_row, mes_rep, depto_row, sitio_row, errors_add=(int(count) - 1))
-
-                errores_iddup.append({
-                    "País": pais_row,
-                    "Departamento": depto_row,
-                    "Sitio": sitio_row,
-                    "Mes de reporte": mes_rep,
-                    "Archivo": nombre_archivo,
-                    "ID expediente": str(id_val),
-                    "Ocurrencias": int(count),
-                    "Filas Excel": ", ".join(map(str, filas_excel)),
-                    "Columna Excel": col_letter,
-                })
-
-# ====== TX_CURR vs Dispensación_TARV ======
+# ===== TX_CURR vs Dispensación_TARV (por Sexo/Edad) =====
 def procesar_tx_curr_cuadros(
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str,
     nombre_archivo: str, errores_currq
@@ -638,11 +391,8 @@ def procesar_tx_curr_cuadros(
 
     pos_tx = _find_label_positions([["tx", "curr"]])
     pos_et = _find_label_positions([
-        ["dispens", "tar"],
-        ["dispensacion", "tar"],
-        ["dispensación", "tar"],
-        ["entrega", "tar"],
-        ["entrega", "tavr"],
+        ["dispens","tar"], ["dispensacion","tar"], ["dispensación","tar"],
+        ["entrega","tar"], ["entrega","tavr"]
     ])
     if not pos_tx or not pos_et:
         return
@@ -717,6 +467,7 @@ def procesar_tx_curr_cuadros(
         totals_et, edades_et, _ = _extract_table_totals(hdr_et, hdr_tx)
         totals_tx, edades_tx, _ = _extract_table_totals(hdr_tx, None)
 
+    # Contexto
     cols_hdr = df_raw.iloc[hdr_tx].fillna("").astype(str).tolist()
     cols_hdrn = [_norm(x) for x in cols_hdr]
 
@@ -755,30 +506,163 @@ def procesar_tx_curr_cuadros(
 
     fila_ctx_vals = df_raw.iloc[hdr_tx + 1].fillna("").astype(str).tolist() if (hdr_tx + 1) < nrows else []
     pais_row, depto_row, sitio_row, mes_rep = _ctx_from_rowvals(fila_ctx_vals)
-    register_dim(pais_row, depto_row, sitio_row)
 
     all_keys = set(totals_tx.keys()) | set(totals_et.keys())
     for (sexo, edad_key) in sorted(all_keys):
         v_tx = int(totals_tx.get((sexo, edad_key), 0))
         v_et = int(totals_et.get((sexo, edad_key), 0))
-        etiqueta_edad = edades_tx.get(edad_key) or edades_et.get(edad_key) or edad_key
-
+        etiqueta_edad = (edades_tx.get(edad_key) or edades_et.get(edad_key) or edad_key)
         _add_metric(IND_CURR_Q1Q2_DIFF, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
         if v_tx != v_et:
             _add_metric(IND_CURR_Q1Q2_DIFF, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
             errores_currq.append({
-                "País": pais_row,
-                "Departamento": depto_row,
-                "Sitio": sitio_row,
-                "Mes de reporte": mes_rep,
-                "Archivo": nombre_archivo,
-                "Sexo": sexo,
-                "Rango de edad": etiqueta_edad,
-                "TX_CURR": v_tx,
-                "Dispensación_TARV": v_et,
+                "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
+                "Archivo": nombre_archivo, "Sexo": sexo, "Rango de edad": etiqueta_edad,
+                "TX_CURR": v_tx, "Dispensación_TARV": v_et,
                 "Diferencia (TX_CURR - Disp_TARV)": v_tx - v_et,
                 "Disp_TARV > TX_CURR": "Sí" if v_et > v_tx else "No",
             })
+
+# ===== HTS_TST + ID Duplicado =====
+def procesar_hts_tst(
+    xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
+    errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup
+):
+    if "HTS_TST" not in xl.sheet_names:
+        return
+
+    df_raw = xl.parse("HTS_TST", header=None)
+    idx_hts = encontrar_fila_encabezado(df_raw, ["Resultado", "CD4"])
+    if idx_hts is None:
+        return
+
+    df_data, _ = normalizar_tabla_por_encabezado(df_raw, idx_hts)
+    df_data.columns = _dedupe_columns(df_data.columns)
+    df_data = _rename_standard_columns(df_data)
+
+    col_resultado = _first_col(df_data, "resultado")
+    col_cd4       = _first_col(df_data, "cd4")
+    col_tarv      = _first_col(df_data, "inicio", "tar")
+    col_diag      = _first_col(df_data, "fecha", "diagn")
+    col_sitio     = _first_col(df_data, "servicio", "salud") or _first_col(df_data, "sitio") or _first_col(df_data, "clinica")
+    col_pais      = _first_col(df_data, "pais")
+    col_depto     = _first_col(df_data, "departamento") or _first_col(df_data, "depto") or _first_col(df_data, "provincia")
+    col_id = (_first_col(df_data, "id", "expediente") or
+              _first_col(df_data, "numero", "expediente") or
+              _first_col(df_data, "número", "expediente") or
+              _first_col(df_data, "id"))
+
+    if not all([col_resultado, col_cd4, col_diag]):
+        return
+
+    fila_base_hts = idx_hts + 3
+    for i, row in df_data.iterrows():
+        resultado  = str(_coerce_scalar(row.get(col_resultado))).strip().lower()
+        cd4        = _coerce_scalar(row.get(col_cd4))
+        fecha_diag = _coerce_scalar(row.get(col_diag))
+        fecha_tarv = _coerce_scalar(row.get(col_tarv)) if col_tarv else None
+        sitio      = _coerce_scalar(row.get(col_sitio)) if col_sitio else ""
+        pais_row   = _coerce_scalar(row.get(col_pais))  if col_pais else pais_inferido
+        depto_row  = _coerce_scalar(row.get(col_depto)) if col_depto else ""
+
+        mes_rep    = month_label_from_value(fecha_diag) or month_label_from_value(mes_inferido)
+
+        pais_row   = str(pais_row).strip() or pais_inferido
+        depto_row  = str(depto_row).strip()
+        sitio_row  = str(sitio).strip()
+        mes_rep    = str(mes_rep).strip() or month_label_from_value(mes_inferido)
+
+        # CHECK para duplicados (para %)
+        if col_id is not None:
+            id_val = _coerce_scalar(row.get(col_id))
+            if pd.notna(id_val) and str(id_val).strip():
+                _add_metric(IND_ID_DUPLICADO, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+
+        # CD4 vacío cuando Resultado = Positivo
+        if resultado == "positivo":
+            _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+            if pd.isna(cd4) or str(cd4).strip() == "":
+                _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+                errores_cd4.append({
+                    "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
+                    "Archivo": nombre_archivo, "Resultado": "Positivo", "CD4 Basal": "",
+                    "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_cd4
+                })
+
+        # Fecha TARV < Diagnóstico
+        if pd.notna(fecha_diag) and pd.notna(fecha_tarv) and str(fecha_tarv).strip():
+            try:
+                fd = pd.to_datetime(fecha_diag, dayfirst=True, errors="coerce")
+                ft = pd.to_datetime(fecha_tarv, dayfirst=True, errors="coerce")
+                if pd.notna(fd) and pd.notna(ft):
+                    _add_metric(IND_TARV_LT_DIAG, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+                    if ft < fd:
+                        _add_metric(IND_TARV_LT_DIAG, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+                        errores_fecha_tarv.append({
+                            "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
+                            "Archivo": nombre_archivo, "Resultado": "Positivo" if resultado == "positivo" else "",
+                            "Fecha diagnóstico": fd.date(), "Fecha inicio TARV": ft.date(),
+                            "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_tarv
+                        })
+            except Exception:
+                pass
+
+        # Formato de Fecha Diagnóstico (si trae '/')
+        try:
+            fecha_texto = str(fecha_diag).strip()
+            if fecha_texto and "/" in fecha_texto:
+                _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+                partes = fecha_texto.split("/")
+                if len(partes) == 3:
+                    dia, mes_, anio = partes
+                    if int(mes_) > 12: raise ValueError
+                    datetime.strptime(fecha_texto, "%d/%m/%Y")
+        except Exception:
+            _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+            errores_formato_fecha_diag.append({
+                "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
+                "Archivo": nombre_archivo,
+                "Fecha del diagnóstico de la prueba": fecha_diag,
+                "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_diag
+            })
+
+    # Duplicados ID
+    if col_id:
+        try:
+            col_id_idx = list(df_data.columns).index(col_id)
+        except ValueError:
+            col_id_idx = None
+
+        ids_raw = df_data[col_id].astype(str).str.strip()
+        mask_non_empty = ids_raw.replace({"nan": "", "NaN": ""}).astype(bool)
+        vc = ids_raw[mask_non_empty].value_counts()
+        duplicados = vc[vc > 1]
+
+        if not duplicados.empty:
+            for id_val, count in duplicados.items():
+                idxs = df_data.index[ids_raw == id_val].tolist()
+                r0 = df_data.loc[idxs[0]]
+
+                pais_row  = str(_coerce_scalar(r0.get(col_pais)))  if col_pais  else pais_inferido
+                depto_row = str(_coerce_scalar(r0.get(col_depto))) if col_depto else ""
+                sitio_row = str(_coerce_scalar(r0.get(col_sitio)))  if col_sitio  else ""
+                mes_rep   = month_label_from_value(_coerce_scalar(r0.get(col_diag))) or month_label_from_value(mes_inferido)
+
+                pais_row  = pais_row.strip() or pais_inferido
+                depto_row = depto_row.strip()
+                sitio_row = sitio_row.strip()
+                mes_rep   = mes_rep.strip() or month_label_from_value(mes_inferido)
+
+                filas_excel = [int(idx_hts + 3 + i) for i in idxs]
+                col_letter = get_column_letter(col_id_idx + 1) if col_id_idx is not None else col_id
+
+                _add_metric(IND_ID_DUPLICADO, pais_row, mes_rep, depto_row, sitio_row, errors_add=(int(count) - 1))
+
+                errores_iddup.append({
+                    "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
+                    "Archivo": nombre_archivo, "ID expediente": str(id_val), "Ocurrencias": int(count),
+                    "Filas Excel": ", ".join(map(str, filas_excel)), "Columna Excel": col_letter
+                })
 
 # ============================
 # --------- PROCESO ----------
@@ -810,29 +694,24 @@ if procesar:
     errores_cd4 = []
     errores_fecha_tarv = []
     errores_formato_fecha_diag = []
-    errores_currq = []   # TX_CURR ≠ Dispensación_TARV
-    errores_iddup = []   # NUEVO: IDs duplicados HTS_TST
+    errores_currq = []
+    errores_iddup = []
 
-    # Reiniciar métricas y catálogo
     st.session_state.metrics_global = defaultdict(lambda: {"errors": 0, "checks": 0})
     st.session_state.metrics_by_pds = defaultdict(lambda: {"errors": 0, "checks": 0})
-    st.session_state.dim_locs = set()
 
     progreso = st.progress(0.0, text="Procesando archivos…"); total = len(entradas)
     for idx, (nombre_archivo, data_bytes, ruta_rel) in enumerate(entradas, start=1):
         try:
             pais_inf, mes_inf = inferir_pais_mes(ruta_rel.replace("\\", "/"), default_pais, default_mes)
-            register_dim(pais_inf, "", "")
             xl = leer_excel_desde_bytes(nombre_archivo, data_bytes)
             procesar_tx_pvls_y_curr(xl, pais_inf, mes_inf, nombre_archivo, errores_numerador, errores_txpvls)
-            procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo,
-                             errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup)
+            procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo, errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup)
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
         except Exception as e:
             st.warning(f"⚠️ Error procesando {nombre_archivo}: {e}")
         progreso.progress(idx/total, text=f"Procesando {idx} de {total}…")
 
-    # Guardar DataFrames en sesión
     st.session_state.df_num   = pd.DataFrame(errores_numerador)
     st.session_state.df_txpv  = pd.DataFrame(errores_txpvls)
     st.session_state.df_cd4   = pd.DataFrame(errores_cd4)
@@ -841,16 +720,6 @@ if procesar:
     st.session_state.df_currq = pd.DataFrame(errores_currq)
     st.session_state.df_iddup = pd.DataFrame(errores_iddup)
     st.session_state.processed = True
-
-    # Construir catálogo maestro de ubicaciones para segmentadores
-    if st.session_state.dim_locs:
-        st.session_state.dim_df = pd.DataFrame(
-            sorted(list(st.session_state.dim_locs)),
-            columns=["País", "Departamento", "Sitio"]
-        )
-    else:
-        st.session_state.dim_df = pd.DataFrame(columns=["País", "Departamento", "Sitio"])
-
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
 
 # ============================
@@ -860,95 +729,91 @@ if not st.session_state.processed:
     st.info("Carga tus archivos y pulsa **Procesar**.")
     st.stop()
 
-# Asegurar columnas base en DF de errores
+# Asegurar columnas base
 for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup"]:
     df = st.session_state[dfname]
+    if not isinstance(df, pd.DataFrame):
+        st.session_state[dfname] = pd.DataFrame()
+        continue
     if not df.empty:
         for col in ["País","Departamento","Sitio","Mes de reporte"]:
             if col not in df.columns:
                 st.session_state[dfname][col] = ""
 
-# ===== Helpers de segmentadores =====
-def ensure_in_options(value: str, options: List[str]) -> str:
-    return value if value in options else "Todos"
+# Universo para segmentadores a partir de TODOS los errores
+df_all = pd.concat(
+    [df for df in [
+        st.session_state.df_num, st.session_state.df_txpv, st.session_state.df_cd4,
+        st.session_state.df_tarv, st.session_state.df_fdiag, st.session_state.df_currq,
+        st.session_state.df_iddup
+    ] if isinstance(df, pd.DataFrame) and not df.empty],
+    ignore_index=True
+) if any([isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
+          for k in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup"]]) \
+  else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
-# ===== Limpieza y construcción de SEGMENTADORES =====
-_VALID_TXT_RE = re.compile(r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'’ -]{2,}$")
-_MESES_LOWER = {m.lower() for m in MESES}
+# Normaliza valores para evitar mezcla (espacios, mayúsculas, etc.)
+for c in ["País","Departamento","Sitio","Mes de reporte"]:
+    if c in df_all.columns:
+        df_all[c] = df_all[c].astype(str).str.strip()
 
-def _es_texto_lugar_valido(val: str) -> bool:
-    if val is None:
-        return False
-    s = str(val).strip()
-    if not s:
-        return False
-    sl = s.lower()
-    if any(ch.isdigit() for ch in sl):
-        return False
-    toks = re.split(r"[\s_\-./]+", sl)
-    if any(t in _MESES_LOWER for t in toks) or sl in _MESES_LOWER:
-        return False
-    return bool(_VALID_TXT_RE.match(s))
+def _limpia_opts(vals):
+    arr = []
+    for v in vals:
+        s = str(v).strip()
+        if not s: 
+            continue
+        if s.lower() == "desconocido":
+            continue
+        if s.lower() == "nan":
+            continue
+        arr.append(s)
+    return ["Todos"] + sorted(set(arr))
 
-def _es_pais_valido(val: str) -> bool:
-    return _es_texto_lugar_valido(val)
+# === Callbacks de cascada ===
+def _on_change_pais():
+    st.session_state.sel_depto = "Todos"
+    st.session_state.sel_sitio = "Todos"
 
-dim_df = st.session_state.dim_df.copy()
-mask_clean = dim_df["País"].map(_es_pais_valido)
-dim_df_clean = dim_df[mask_clean].copy()
-for col in ["País", "Departamento", "Sitio"]:
-    if col in dim_df_clean.columns:
-        dim_df_clean[col] = dim_df_clean[col].map(_canon_txt)
-dim_df_clean = dim_df_clean.drop_duplicates(subset=["País", "Departamento", "Sitio"]).reset_index(drop=True)
+def _on_change_depto():
+    st.session_state.sel_sitio = "Todos"
 
-# ===== 1) SEGMENTADORES (cascada real y LIMPIOS) =====
-with card("Segmentadores", "🎛️"):
-    paises_all = sorted([
-        p for p in dim_df_clean["País"].dropna().unique().tolist()
-        if _es_pais_valido(p)
-    ])
-    paises = ["Todos"] + paises_all
-    st.session_state.sel_pais = ensure_in_options(st.session_state.sel_pais, paises)
-    sel_pais = st.selectbox("País", paises, index=paises.index(st.session_state.sel_pais), key="sel_pais")
+# ─────────────────────────────────────────────────────────────
+# 1) Segmentadores (caja)
+# ─────────────────────────────────────────────────────────────
+seg = st.container(border=True)
+with seg:
+    st.subheader("🧊 Segmentadores")
 
-    if sel_pais != "Todos":
-        departs_all = sorted([
-            d for d in dim_df_clean.loc[dim_df_clean["País"] == sel_pais, "Departamento"]
-            .dropna().unique().tolist()
-            if d and _es_texto_lugar_valido(d)
-        ])
+    # País
+    pais_opts = _limpia_opts(df_all["País"].dropna().tolist()) if "País" in df_all.columns else ["Todos"]
+    if st.session_state.sel_pais not in pais_opts:
+        st.session_state.sel_pais = "Todos"
+    st.selectbox("País", pais_opts, key="sel_pais", on_change=_on_change_pais)
+
+    # Depto condicionado por país
+    df_p = df_all if st.session_state.sel_pais == "Todos" else df_all[df_all["País"] == st.session_state.sel_pais]
+    depto_opts = _limpia_opts(df_p["Departamento"].dropna().tolist()) if "Departamento" in df_p.columns else ["Todos"]
+    if st.session_state.sel_depto not in depto_opts:
+        st.session_state.sel_depto = "Todos"
+    st.selectbox("Departamento", depto_opts, key="sel_depto", on_change=_on_change_depto)
+
+    # Sitio condicionado por país y depto
+    if st.session_state.sel_depto == "Todos":
+        df_pd = df_p
     else:
-        departs_all = sorted([
-            d for d in dim_df_clean["Departamento"].dropna().unique().tolist()
-            if d and _es_texto_lugar_valido(d)
-        ])
-    departs = ["Todos"] + departs_all
-    st.session_state.sel_depto = ensure_in_options(st.session_state.sel_depto, departs)
-    sel_depto = st.selectbox("Departamento", departs, index=departs.index(st.session_state.sel_depto), key="sel_depto")
+        df_pd = df_p[df_p["Departamento"] == st.session_state.sel_depto]
+    sitio_opts = _limpia_opts(df_pd["Sitio"].dropna().tolist()) if "Sitio" in df_pd.columns else ["Todos"]
+    if st.session_state.sel_sitio not in sitio_opts:
+        st.session_state.sel_sitio = "Todos"
+    st.selectbox("Sitio", sitio_opts, key="sel_sitio")
 
-    mask = pd.Series([True] * len(dim_df_clean))
-    if sel_pais  != "Todos": mask &= (dim_df_clean["País"] == sel_pais)
-    if sel_depto != "Todos": mask &= (dim_df_clean["Departamento"] == sel_depto)
-    sitios_all = sorted([
-        s for s in dim_df_clean.loc[mask, "Sitio"].dropna().unique().tolist()
-        if s and _es_texto_lugar_valido(s)
-    ])
-    if sel_pais == "Todos" and sel_depto == "Todos" and not sitios_all:
-        sitios_all = sorted([
-            s for s in dim_df_clean["Sitio"].dropna().unique().tolist()
-            if s and _es_texto_lugar_valido(s)
-        ])
-    sitios = ["Todos"] + sitios_all
-    st.session_state.sel_sitio = ensure_in_options(st.session_state.sel_sitio, sitios)
-    sel_sitio = st.selectbox("Sitio", sitios, index=sitios.index(st.session_state.sel_sitio), key="sel_sitio")
-
-# Filtro aplicado a cada DF de errores
 def _aplicar_filtro(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     m = pd.Series([True] * len(df))
-    if st.session_state.sel_pais  != "Todos": m &= (df["País"] == st.session_state.sel_pais)
-    if st.session_state.sel_depto != "Todos": m &= (df["Departamento"] == st.session_state.sel_depto)
-    if st.session_state.sel_sitio != "Todos": m &= (df["Sitio"] == st.session_state.sel_sitio)
+    if st.session_state.sel_pais != "Todos":  m &= (df["País"].astype(str).str.strip() == st.session_state.sel_pais)
+    if st.session_state.sel_depto != "Todos": m &= (df["Departamento"].astype(str).str.strip() == st.session_state.sel_depto)
+    if st.session_state.sel_sitio != "Todos": m &= (df["Sitio"].astype(str).str.strip() == st.session_state.sel_sitio)
     return df[m].copy()
 
 df_num_f   = _aplicar_filtro(st.session_state.df_num)
@@ -957,7 +822,7 @@ df_cd4_f   = _aplicar_filtro(st.session_state.df_cd4)
 df_tarv_f  = _aplicar_filtro(st.session_state.df_tarv)
 df_fdiag_f = _aplicar_filtro(st.session_state.df_fdiag)
 df_currq_f = _aplicar_filtro(st.session_state.df_currq)
-df_iddup_f = _aplicar_filtro(st.session_state.df_iddup)  # NUEVO
+df_iddup_f = _aplicar_filtro(st.session_state.df_iddup)
 
 # Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
@@ -996,8 +861,12 @@ df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selecti
     st.session_state.sel_pais, st.session_state.sel_depto, st.session_state.sel_sitio
 )
 
-# ===== 2) RESUMEN (usa DF FILTRADOS) =====
-with card("Resumen (conteo de filas de error)", "📌", badge="Aplica filtros"):
+# ─────────────────────────────────────────────────────────────
+# 2) Resumen
+# ─────────────────────────────────────────────────────────────
+res = st.container(border=True)
+with res:
+    st.subheader("📌 Resumen (conteo de filas de error)")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     c1.metric("Numerador > Denominador", len(df_num_f))
     c2.metric("Denominador > TX_CURR", len(df_txpv_f))
@@ -1007,13 +876,13 @@ with card("Resumen (conteo de filas de error)", "📌", badge="Aplica filtros"):
     c6.metric("TX_CURR ≠ Dispensación_TARV", len(df_currq_f))
     c7.metric("ID (expediente) duplicado", len(df_iddup_f))
 
-# ===== 3) INDICADORES – % DE ERROR =====
-with card("Indicadores – % de error (selección)", "🧮"):
-    cards = [
-        IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING,
-        IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF,
-        IND_ID_DUPLICADO
-    ]
+# ─────────────────────────────────────────────────────────────
+# 3) Indicadores – % de error (selección)
+# ─────────────────────────────────────────────────────────────
+sel = st.container(border=True)
+with sel:
+    st.subheader("📊 Indicadores – % de error (selección)")
+    cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO]
     cols = st.columns(len(cards))
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
     for col, key in zip(cols, cards):
@@ -1021,8 +890,12 @@ with card("Indicadores – % de error (selección)", "🧮"):
         v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
         col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} err/cheq")
 
-# ===== 4) DETALLE POR INDICADOR =====
-with card("Detalle por indicador", "🔎"):
+# ─────────────────────────────────────────────────────────────
+# 4) Detalle por indicador
+# ─────────────────────────────────────────────────────────────
+det = st.container(border=True)
+with det:
+    st.subheader("🔎 Detalle por indicador")
     tabs = st.tabs([
         "Numerador > Denominador",
         "Denominador > TX_CURR",
@@ -1032,16 +905,20 @@ with card("Detalle por indicador", "🔎"):
         "TX_CURR ≠ Dispensación_TARV",
         "ID (expediente) duplicado",
     ])
-    with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=320)
-    with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=320)
-    with tabs[2]: show_df_or_note(df_cd4_f,   "— Sin positivos con CD4 vacío —", height=320)
-    with tabs[3]: show_df_or_note(df_tarv_f,  "— Sin casos TARV < Diagnóstico —", height=320)
-    with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —", height=320)
-    with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=320)
-    with tabs[6]: show_df_or_note(df_iddup_f, "— Sin IDs duplicados en la selección —", height=320)
+    with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=340)
+    with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=340)
+    with tabs[2]: show_df_or_note(df_cd4_f,   "— Sin positivos con CD4 vacío —", height=340)
+    with tabs[3]: show_df_or_note(df_tarv_f,  "— Sin casos TARV < Diagnóstico —", height=340)
+    with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —", height=340)
+    with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=340)
+    with tabs[6]: show_df_or_note(df_iddup_f, "— Sin IDs (expediente) duplicados —", height=340)
 
-# ===== 5) MÉTRICAS =====
-with card("Métricas de calidad (adaptadas al filtro)", "📈"):
+# ─────────────────────────────────────────────────────────────
+# 5) Métricas de calidad (adaptadas al filtro)
+# ─────────────────────────────────────────────────────────────
+met = st.container(border=True)
+with met:
+    st.subheader("📈 Métricas de calidad (adaptadas al filtro)")
     gc1, gc2 = st.columns([1.2, 2])
     with gc1:
         st.markdown("**Métricas – Selección actual**")
@@ -1144,14 +1021,15 @@ filt_dict = {
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
-with card("Descargas", "⬇️"):
-    fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+dl = st.container(border=True)
+with dl:
     cdl1, cdl2 = st.columns(2)
     with cdl1:
-        st.download_button("Descargar Excel (COMPLETO)", data=bytes_excel_full,
+        st.download_button("⬇️ Descargar Excel (COMPLETO)", data=bytes_excel_full,
             file_name=f"VALIDACIONES_MAESTRO_VIH_COMPLETO_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     with cdl2:
-        st.download_button("Descargar Excel (FILTRADO)", data=bytes_excel_filt,
+        st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
