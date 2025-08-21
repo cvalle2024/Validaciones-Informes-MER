@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 from pathlib import Path
+from contextlib import contextmanager
 
 # ============================
 # --------- CONFIG UI --------
@@ -39,6 +40,50 @@ with st.expander("ℹ️ Cómo usar", expanded=False):
         """
     )
 
+# ====== ESTILOS Y TARJETAS (cajas) ======
+CARD_CSS = """
+<style>
+.card {
+  background: var(--background-color, #0e1117);
+  border: 1px solid rgba(128,128,128,0.25);
+  border-radius: 16px;
+  padding: 18px 18px 12px 18px;
+  margin: 14px 0 18px 0;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+}
+@media (prefers-color-scheme: light) {
+  .card {
+    background: #ffffff;
+    border: 1px solid rgba(0,0,0,0.08);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.06);
+  }
+}
+.card-header { display:flex; align-items:center; gap:10px; margin-bottom: 12px; }
+.card-title  { font-weight:700; font-size:1.15rem; margin:0; letter-spacing:.2px; }
+.card-badge  { font-size:.80rem; background:rgba(127,127,127,.15); border:1px solid rgba(127,127,127,.25);
+               padding:2px 8px; border-radius:999px; }
+.card .stMetric { text-align:center; }
+</style>
+"""
+st.markdown(CARD_CSS, unsafe_allow_html=True)
+
+@contextmanager
+def card(title: str, icon: str = "📦", badge: str | None = None):
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    header_html = f"""
+    <div class='card-header'>
+      <div style="font-size:1.2rem">{icon}</div>
+      <div class='card-title'>{title}</div>
+      {f"<div class='card-badge'>{badge}</div>" if badge else ""}
+    </div>
+    """
+    st.markdown(header_html, unsafe_allow_html=True)
+    try:
+        with st.container():
+            yield
+    finally:
+        st.markdown("</div>", unsafe_allow_html=True)
+
 # ====== DOCUMENTACIÓN (como expander) ======
 DOC_MD = r"""
 # 📖 Documentación de validaciones
@@ -46,7 +91,7 @@ DOC_MD = r"""
 ## Indicadores y reglas
 - **Numerador > Denominador (TX_PVLS):** Por sexo y edad, `Numerador ≤ Denominador`.
 - **Denominador > TX_CURR (PVLS vs TX_CURR):** Por **sexo + tipo de población + edad**, `Denominador (PVLS) ≤ TX_CURR`.
-- **TX_CURR ≠ Dispensación_TARV (en hoja TX_CURR):** Comparación de dos cuadros por **sexo + edad**.
+- **TX_CURR ≠ Dispensación_TARV (TX_CURR):** Comparación de dos cuadros por **sexo + edad**.
 - **CD4 vacío positivo (HTS_TST):** Si `Resultado = Positivo`, **CD4 Basal** no puede estar vacío.
 - **Fecha TARV < Diagnóstico (HTS_TST):** **Fecha inicio TARV** no puede ser anterior a la **Fecha del diagnóstico**.
 - **Formato fecha diagnóstico (HTS_TST):** Si la fecha viene con `/`, debe cumplir **dd/mm/yyyy**.
@@ -105,6 +150,9 @@ for key, val in {
     "df_currq": pd.DataFrame(),  # TX_CURR vs Dispensación_TARV
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
+    # catálogo maestro de ubicaciones
+    "dim_locs": set(),  # set de tuplas (País, Departamento, Sitio)
+    "dim_df": pd.DataFrame(columns=["País", "Departamento", "Sitio"]),
     # selección de filtros
     "sel_pais": "Todos",
     "sel_depto": "Todos",
@@ -236,8 +284,7 @@ def _rename_standard_columns(df: pd.DataFrame) -> pd.DataFrame:
     mapping: Dict[str, str] = {}
     for c in df.columns:
         cn = _norm(c)
-        if not cn:
-            continue
+        if not cn: continue
         if "sexo" in cn or "genero" in cn or "género" in cn:
             mapping[c] = "Sexo"
         elif ("tipo" in cn and "pobl" in cn) or "poblacion clave" in cn or "población clave" in cn:
@@ -286,6 +333,17 @@ def show_df_or_note(df, note="— Sin filas para mostrar —", height=300):
         st.caption(note); return False
     st.dataframe(df, use_container_width=True, height=height); return True
 
+# ---------- Catálogo maestro de ubicaciones ----------
+def _canon_txt(x: str) -> str:
+    return (str(x).strip() if x is not None else "")
+
+def _canon_triplet(pais: str, depto: str, sitio: str) -> tuple:
+    p = _canon_txt(pais); d = _canon_txt(depto); s = _canon_txt(sitio)
+    return (p, d, s)
+
+def register_dim(pais: str, depto: str, sitio: str):
+    st.session_state.dim_locs.add(_canon_triplet(pais, depto, sitio))
+
 # ============================
 # ------- VALIDACIONES -------
 # ============================
@@ -323,7 +381,7 @@ def procesar_tx_pvls_y_curr(
     col_depto  = buscar_columna_multi(df_data.columns, "departamento") or buscar_columna_multi(df_data.columns, "depto") or buscar_columna_multi(df_data.columns, "provincia")
     col_sitio  = buscar_columna_multi(df_data.columns, "servicio", "salud") or buscar_columna_multi(df_data.columns, "sitio") or buscar_columna_multi(df_data.columns, "clinica")
 
-    # >>> Fecha/Mes de reporte (prioridad)
+    # >>> Fecha/Mes de reporte
     col_fecha_rep = buscar_columna_multi(df_data.columns, "fecha", "reporte")
     col_mesrep    = buscar_columna_multi(df_data.columns, "mes", "reporte")
     def _ctx(row):
@@ -350,6 +408,7 @@ def procesar_tx_pvls_y_curr(
         if row_den.empty: continue
         row_den = row_den.iloc[0]
         pais_row, depto_row, sitio_row, mes_rep = _ctx(row_num)
+        register_dim(pais_row, depto_row, sitio_row)
 
         for col in columnas_edad:
             val_num = numeros_seguro(row_num.get(col))
@@ -385,6 +444,8 @@ def procesar_tx_pvls_y_curr(
             row_curr = row_curr.iloc[0]
 
             pais_row, depto_row, sitio_row, mes_rep = _ctx(row_den)
+            register_dim(pais_row, depto_row, sitio_row)
+
             for col in columnas_edad:
                 val_den = numeros_seguro(row_den.get(col))
                 val_curr = numeros_seguro(row_curr.get(col))
@@ -443,6 +504,8 @@ def procesar_hts_tst(
         depto_row  = str(depto_row).strip()
         sitio_row  = str(sitio).strip()
         mes_rep    = str(mes_rep).strip() or month_label_from_value(mes_inferido)
+
+        register_dim(pais_row, depto_row, sitio_row)
 
         # CD4 vacío cuando Resultado = Positivo
         if resultado == "positivo":
@@ -594,7 +657,7 @@ def procesar_tx_curr_cuadros(
         totals_et, edades_et, _ = _extract_table_totals(hdr_et, hdr_tx)
         totals_tx, edades_tx, _ = _extract_table_totals(hdr_tx, None)
 
-    # Contexto: fila debajo del header de TX_CURR
+    # Contexto desde fila debajo del header de TX_CURR
     cols_hdr = df_raw.iloc[hdr_tx].fillna("").astype(str).tolist()
     cols_hdrn = [_norm(x) for x in cols_hdr]
 
@@ -633,6 +696,7 @@ def procesar_tx_curr_cuadros(
 
     fila_ctx_vals = df_raw.iloc[hdr_tx + 1].fillna("").astype(str).tolist() if (hdr_tx + 1) < nrows else []
     pais_row, depto_row, sitio_row, mes_rep = _ctx_from_rowvals(fila_ctx_vals)
+    register_dim(pais_row, depto_row, sitio_row)
 
     # Comparación por (Sexo, Edad)
     all_keys = set(totals_tx.keys()) | set(totals_et.keys())
@@ -690,14 +754,17 @@ if procesar:
     errores_formato_fecha_diag = []
     errores_currq = []  # TX_CURR ≠ Dispensación_TARV
 
-    # Reiniciar métricas
+    # Reiniciar métricas y catálogo
     st.session_state.metrics_global = defaultdict(lambda: {"errors": 0, "checks": 0})
     st.session_state.metrics_by_pds = defaultdict(lambda: {"errors": 0, "checks": 0})
+    st.session_state.dim_locs = set()
 
     progreso = st.progress(0.0, text="Procesando archivos…"); total = len(entradas)
     for idx, (nombre_archivo, data_bytes, ruta_rel) in enumerate(entradas, start=1):
         try:
             pais_inf, mes_inf = inferir_pais_mes(ruta_rel.replace("\\", "/"), default_pais, default_mes)
+            # Registrar país inferido por si las hojas no traen ubicación
+            register_dim(pais_inf, "", "")
             xl = leer_excel_desde_bytes(nombre_archivo, data_bytes)
             procesar_tx_pvls_y_curr(xl, pais_inf, mes_inf, nombre_archivo, errores_numerador, errores_txpvls)
             procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo, errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag)
@@ -714,6 +781,16 @@ if procesar:
     st.session_state.df_fdiag = pd.DataFrame(errores_formato_fecha_diag)
     st.session_state.df_currq = pd.DataFrame(errores_currq)
     st.session_state.processed = True
+
+    # Construir catálogo maestro de ubicaciones para segmentadores
+    if st.session_state.dim_locs:
+        st.session_state.dim_df = pd.DataFrame(
+            sorted(list(st.session_state.dim_locs)),
+            columns=["País", "Departamento", "Sitio"]
+        )
+    else:
+        st.session_state.dim_df = pd.DataFrame(columns=["País", "Departamento", "Sitio"])
+
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
 
 # ============================
@@ -723,7 +800,7 @@ if not st.session_state.processed:
     st.info("Carga tus archivos y pulsa **Procesar**.")
     st.stop()
 
-# Asegurar columnas base
+# Asegurar columnas base en DF de errores
 for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq"]:
     df = st.session_state[dfname]
     if not df.empty:
@@ -731,40 +808,92 @@ for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq"]:
             if col not in df.columns:
                 st.session_state[dfname][col] = ""
 
-# Universo para filtros
-df_all = pd.concat(
-    [df for df in [
-        st.session_state.df_num, st.session_state.df_txpv, st.session_state.df_cd4,
-        st.session_state.df_tarv, st.session_state.df_fdiag, st.session_state.df_currq
-    ] if not df.empty],
-    ignore_index=True
-) if any([not st.session_state[k].empty for k in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq"]]) \
-  else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
+# ===== Helpers de segmentadores =====
+def ensure_in_options(value: str, options: List[str]) -> str:
+    return value if value in options else "Todos"
 
-paises  = ["Todos"] + (sorted([p for p in df_all["País"].dropna().unique().tolist() if str(p).strip()]) if not df_all.empty else [])
-departs = ["Todos"] + (sorted([d for d in df_all["Departamento"].dropna().unique().tolist() if str(d).strip()]) if not df_all.empty else [])
-sitios  = ["Todos"] + (sorted([s for s in df_all["Sitio"].dropna().unique().tolist() if str(s).strip()]) if not df_all.empty else [])
+# ===== Limpieza y construcción de SEGMENTADORES =====
+# Reglas para depurar nombres que se cuelan (p.ej., "Julio 2025")
+import re
+_VALID_TXT_RE = re.compile(r"^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'’ -]{2,}$")
+_MESES_LOWER = {m.lower() for m in MESES}
 
-# 1) Segmentadores
-st.subheader("🎛️ Segmentadores")
-fc1, fc2, fc3 = st.columns(3)
-with fc1:
-    st.selectbox("País", paises, index=paises.index(st.session_state.sel_pais) if st.session_state.sel_pais in paises else 0, key="sel_pais")
-with fc2:
-    st.selectbox("Departamento", departs, index=departs.index(st.session_state.sel_depto) if st.session_state.sel_depto in departs else 0, key="sel_depto")
-with fc3:
-    st.selectbox("Sitio", sitios, index=sitios.index(st.session_state.sel_sitio) if st.session_state.sel_sitio in sitios else 0, key="sel_sitio")
+def _es_texto_lugar_valido(val: str) -> bool:
+    if val is None:
+        return False
+    s = str(val).strip()
+    if not s:
+        return False
+    sl = s.lower()
+    if any(ch.isdigit() for ch in sl):
+        return False
+    toks = re.split(r"[\s_\-./]+", sl)
+    if any(t in _MESES_LOWER for t in toks) or sl in _MESES_LOWER:
+        return False
+    return bool(_VALID_TXT_RE.match(s))
 
-sel_pais  = st.session_state.sel_pais
-sel_depto = st.session_state.sel_depto
-sel_sitio = st.session_state.sel_sitio
+def _es_pais_valido(val: str) -> bool:
+    return _es_texto_lugar_valido(val)
 
+dim_df = st.session_state.dim_df.copy()
+mask_clean = dim_df["País"].map(_es_pais_valido)
+dim_df_clean = dim_df[mask_clean].copy()
+for col in ["País", "Departamento", "Sitio"]:
+    if col in dim_df_clean.columns:
+        dim_df_clean[col] = dim_df_clean[col].map(_canon_txt)
+dim_df_clean = dim_df_clean.drop_duplicates(subset=["País", "Departamento", "Sitio"]).reset_index(drop=True)
+
+# ===== 1) SEGMENTADORES (cascada real y LIMPIOS) =====
+with card("Segmentadores", "🎛️"):
+    # País
+    paises_all = sorted([
+        p for p in dim_df_clean["País"].dropna().unique().tolist()
+        if _es_pais_valido(p)
+    ])
+    paises = ["Todos"] + paises_all
+    st.session_state.sel_pais = ensure_in_options(st.session_state.sel_pais, paises)
+    sel_pais = st.selectbox("País", paises, index=paises.index(st.session_state.sel_pais), key="sel_pais")
+
+    # Departamento (depende de País)
+    if sel_pais != "Todos":
+        departs_all = sorted([
+            d for d in dim_df_clean.loc[dim_df_clean["País"] == sel_pais, "Departamento"]
+            .dropna().unique().tolist()
+            if d and _es_texto_lugar_valido(d)
+        ])
+    else:
+        departs_all = sorted([
+            d for d in dim_df_clean["Departamento"].dropna().unique().tolist()
+            if d and _es_texto_lugar_valido(d)
+        ])
+    departs = ["Todos"] + departs_all
+    st.session_state.sel_depto = ensure_in_options(st.session_state.sel_depto, departs)
+    sel_depto = st.selectbox("Departamento", departs, index=departs.index(st.session_state.sel_depto), key="sel_depto")
+
+    # Sitio (depende de País/Depto)
+    mask = pd.Series([True] * len(dim_df_clean))
+    if sel_pais  != "Todos": mask &= (dim_df_clean["País"] == sel_pais)
+    if sel_depto != "Todos": mask &= (dim_df_clean["Departamento"] == sel_depto)
+    sitios_all = sorted([
+        s for s in dim_df_clean.loc[mask, "Sitio"].dropna().unique().tolist()
+        if s and _es_texto_lugar_valido(s)
+    ])
+    if sel_pais == "Todos" and sel_depto == "Todos" and not sitios_all:
+        sitios_all = sorted([
+            s for s in dim_df_clean["Sitio"].dropna().unique().tolist()
+            if s and _es_texto_lugar_valido(s)
+        ])
+    sitios = ["Todos"] + sitios_all
+    st.session_state.sel_sitio = ensure_in_options(st.session_state.sel_sitio, sitios)
+    sel_sitio = st.selectbox("Sitio", sitios, index=sitios.index(st.session_state.sel_sitio), key="sel_sitio")
+
+# Filtro aplicado a cada DF de errores
 def _aplicar_filtro(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     m = pd.Series([True] * len(df))
-    if sel_pais != "Todos":  m &= (df["País"] == sel_pais)
-    if sel_depto != "Todos": m &= (df["Departamento"] == sel_depto)
-    if sel_sitio != "Todos": m &= (df["Sitio"] == sel_sitio)
+    if st.session_state.sel_pais  != "Todos": m &= (df["País"] == st.session_state.sel_pais)
+    if st.session_state.sel_depto != "Todos": m &= (df["Departamento"] == st.session_state.sel_depto)
+    if st.session_state.sel_sitio != "Todos": m &= (df["Sitio"] == st.session_state.sel_sitio)
     return df[m].copy()
 
 df_num_f   = _aplicar_filtro(st.session_state.df_num)
@@ -774,7 +903,7 @@ df_tarv_f  = _aplicar_filtro(st.session_state.df_tarv)
 df_fdiag_f = _aplicar_filtro(st.session_state.df_fdiag)
 df_currq_f = _aplicar_filtro(st.session_state.df_currq)
 
-# Métricas (incluye todos los indicadores)
+# Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
     agg = defaultdict(lambda: {"errors": 0, "checks": 0})
     for (pais, depto, sitio, mes_rep, ind), v in st.session_state.metrics_by_pds.items():
@@ -807,55 +936,57 @@ def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
         df_group = pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte","Indicador","Errores","Chequeos","% Error"])
     return df_global, df_group
 
-df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio)
+df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selection(
+    st.session_state.sel_pais, st.session_state.sel_depto, st.session_state.sel_sitio
+)
 
-# 2) Resumen
-st.subheader("📌 Resumen (conteo de filas de error)")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Numerador > Denominador", len(st.session_state.df_num))
-c2.metric("Denominador > TX_CURR", len(st.session_state.df_txpv))
-c3.metric("CD4 vacío positivo", len(st.session_state.df_cd4))
-c4.metric("TARV < Diagnóstico", len(st.session_state.df_tarv))
-c5.metric("Fecha diag. mal formateada", len(st.session_state.df_fdiag))
-c6.metric("TX_CURR ≠ Dispensación_TARV", len(st.session_state.df_currq))
+# ===== 2) RESUMEN (usa DF FILTRADOS) =====
+with card("Resumen (conteo de filas de error)", "📌", badge="Aplica filtros"):
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Numerador > Denominador", len(df_num_f))
+    c2.metric("Denominador > TX_CURR", len(df_txpv_f))
+    c3.metric("CD4 vacío positivo", len(df_cd4_f))
+    c4.metric("TARV < Diagnóstico", len(df_tarv_f))
+    c5.metric("Fecha diag. mal formateada", len(df_fdiag_f))
+    c6.metric("TX_CURR ≠ Dispensación_TARV", len(df_currq_f))
 
-# 3) Indicadores – % de error (selección)
-st.markdown("**Indicadores – % de error (selección)**")
-cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF]
-cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
-cols = [cc1, cc2, cc3, cc4, cc5, cc6]
-sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
-for col, key in zip(cols, cards):
-    name = DISPLAY_NAMES[key]
-    v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
-    col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} err/cheq")
+# ===== 3) INDICADORES – % DE ERROR =====
+with card("Indicadores – % de error (selección)", "🧮"):
+    cc1, cc2, cc3, cc4, cc5, cc6 = st.columns(6)
+    cols = [cc1, cc2, cc3, cc4, cc5, cc6]
+    cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF]
+    sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
+    for col, key in zip(cols, cards):
+        name = DISPLAY_NAMES[key]
+        v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
+        col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} err/cheq")
 
-# 4) Detalle por indicador
-st.markdown("### 🔎 Detalle por indicador")
-tabs = st.tabs([
-    "Numerador > Denominador",
-    "Denominador > TX_CURR",
-    "CD4 vacío positivo",
-    "Fecha TARV < Diagnóstico",
-    "Formato fecha diagnóstico",
-    "TX_CURR ≠ Dispensación_TARV",
-])
-with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=320)
-with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=320)
-with tabs[2]: show_df_or_note(df_cd4_f,   "— Sin positivos con CD4 vacío —", height=320)
-with tabs[3]: show_df_or_note(df_tarv_f,  "— Sin casos TARV < Diagnóstico —", height=320)
-with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —", height=320)
-with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=320)
+# ===== 4) DETALLE POR INDICADOR =====
+with card("Detalle por indicador", "🔎"):
+    tabs = st.tabs([
+        "Numerador > Denominador",
+        "Denominador > TX_CURR",
+        "CD4 vacío positivo",
+        "Fecha TARV < Diagnóstico",
+        "Formato fecha diagnóstico",
+        "TX_CURR ≠ Dispensación_TARV",
+    ])
+    with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=320)
+    with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=320)
+    with tabs[2]: show_df_or_note(df_cd4_f,   "— Sin positivos con CD4 vacío —", height=320)
+    with tabs[3]: show_df_or_note(df_tarv_f,  "— Sin casos TARV < Diagnóstico —", height=320)
+    with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —", height=320)
+    with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=320)
 
-# 5) Métricas de calidad
-st.subheader("📈 Métricas de calidad (adaptadas al filtro)")
-gc1, gc2 = st.columns([1.2, 2])
-with gc1:
-    st.markdown("**Métricas – Selección actual**")
-    show_df_or_note(df_metricas_global_sel, "— Sin métricas para la selección —", height=260)
-with gc2:
-    st.markdown("**Desglose por Mes – Selección**")
-    show_df_or_note(df_metricas_por_mes_sel, "— Sin desglose para la selección —", height=260)
+# ===== 5) MÉTRICAS =====
+with card("Métricas de calidad (adaptadas al filtro)", "📈"):
+    gc1, gc2 = st.columns([1.2, 2])
+    with gc1:
+        st.markdown("**Métricas – Selección actual**")
+        show_df_or_note(df_metricas_global_sel, "— Sin métricas para la selección —", height=260)
+    with gc2:
+        st.markdown("**Desglose por Mes – Selección**")
+        show_df_or_note(df_metricas_por_mes_sel, "— Sin desglose para la selección —", height=260)
 
 # ============================
 # ---------- DESCARGA --------
@@ -948,14 +1079,14 @@ filt_dict = {
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
-# 6) Botones de descarga
-fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
-cdl1, cdl2 = st.columns(2)
-with cdl1:
-    st.download_button("⬇️ Descargar Excel (COMPLETO)", data=bytes_excel_full,
-        file_name=f"VALIDACIONES_MAESTRO_VIH_COMPLETO_{fecha_str}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-with cdl2:
-    st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
-        file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+with card("Descargas", "⬇️"):
+    fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+    cdl1, cdl2 = st.columns(2)
+    with cdl1:
+        st.download_button("Descargar Excel (COMPLETO)", data=bytes_excel_full,
+            file_name=f"VALIDACIONES_MAESTRO_VIH_COMPLETO_{fecha_str}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    with cdl2:
+        st.download_button("Descargar Excel (FILTRADO)", data=bytes_excel_filt,
+            file_name=f"VALIDACIONES_MAESTRO_VIH_FILTRADO_{fecha_str}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
