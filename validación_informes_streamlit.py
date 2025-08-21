@@ -881,13 +881,13 @@ res = st.container(border=True)
 with res:
     st.subheader("⚫ *Resumen de errores por indicador*")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-    c1.metric("Numerador > Denominador", len(df_num_f))
-    c2.metric("Denominador > TX_CURR", len(df_txpv_f))
-    c3.metric("CD4 vacío positivo", len(df_cd4_f))
-    c4.metric("TARV < Diagnóstico", len(df_tarv_f))
-    c5.metric("Fecha diag. mal formateada", len(df_fdiag_f))
-    c6.metric("TX_CURR ≠ Dispensación_TARV", len(df_currq_f))
-    c7.metric("ID (expediente) duplicado", len(df_iddup_f))
+    c1.metric("*TX_PVLS Numerador > TX_PVLS Denominador*", len(df_num_f))
+    c2.metric("*TX_PVLS Denominador > TX_CURR*", len(df_txpv_f))
+    c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
+    c4.metric("*TARV < Diagnóstico*", len(df_tarv_f))
+    c5.metric("*Fecha diag. mal formateada*", len(df_fdiag_f))
+    c6.metric("*TX_CURR ≠ Dispensación_TARV*", len(df_currq_f))
+    c7.metric("*ID duplicado*", len(df_iddup_f))
 
 # 3) Indicadores – % de error (selección)
 sel = st.container(border=True)
@@ -1040,6 +1040,7 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
 
