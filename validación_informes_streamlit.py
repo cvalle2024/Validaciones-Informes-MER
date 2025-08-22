@@ -899,7 +899,7 @@ with sel:
     for col, key in zip(cols, cards):
         name = DISPLAY_NAMES[key]
         v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
-        col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} err/cheq")
+        col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} Num/Den")
 
 # 4) Detalle por indicador
 det = st.container(border=True)
@@ -1040,6 +1040,7 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
 
