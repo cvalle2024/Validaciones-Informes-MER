@@ -29,14 +29,99 @@ with c_title:
     st.title("✅ Script de validación de indicadores MER (VIHCA)")
     st.caption("TX_PVLS / TX_CURR / HTS_TST • Reglas por Sexo, Población, Rango de edad y campos clave")
 
-with st.expander("ℹ️ Cómo usar", expanded=False):
-    st.markdown(
-        """
-1) **Carga** uno o varios `.xlsx` o un `.zip` con subcarpetas.  
-2) Pulsa **Procesar**.  
-3) Usa los **segmentadores** (País / Depto / Sitio).  
-4) **Descarga** el Excel (completo o filtrado).  
-        """
+
+def _build_doc_md() -> str:
+    return r"""
+# 📖 Documentación – Validaciones de indicadores MER
+
+## 1. Introducción
+- Este portal describe la estructura y funcionalidad del portal de validaciones automáticas para los indicadores del proyecto VIHCA,
+  conforme a los **lineamientos establecidos por la Guía MER de PERFAR.** 
+- De manera que esto permita asegurar la integridad, consistencia y calidad de los datos reportados, mediante la ejecución de diagnósticos automatizados y presentación de alertas tempranas de errores encontrados para su oportuna corrección. 
+
+## 2. Instrucciones de uso del Portal de Validaciones 
+1. Ingresar al portal mediante el enlace de conexión compartido por el equipo de M&E regional.
+2. **Cargar** uno o varios `.xlsx` o un `.zip` (con subcarpetas).
+3. Pulsar **Procesar**.
+4. Usar **Segmentadores** (País / Departamento / Sitio).
+5. Revisar **Resumen**, **% de error**, **Detalle**, **Métricas**.
+6. **Descargar** Excel completo o filtrado.
+7.	Aplicar las correcciones necesarias para corregir o actualizar el dato alertado, antes del envío final a su jefatura inmediata.
+
+## 3. Objetivos del Portal de Validaciones
+
+- Detectar errores comunes de forma anticipada, en las bases de datos locales de cada país, antes de cargar datos en DATIM.
+- Generar visualizaciones y una tabla resumen de los errores encontrados en los archivos cargados en el Portal.
+- Fortalecer la calidad y confiabilidad de los datos reportados por los equipos en cada país. 
+
+
+
+## 3. Indicadores y reglas que se validan
+- **Formato fecha diagnóstico (HTS_TST)**
+  - Regla: Utilizar formato de fehca `dd/mm/yyyy`.
+- **ID duplicado (HTS_TST)**
+  - Regla: Se verifica que los registros de las pruebas no se repita el mismo ID en el trimestre.
+- **Fecha de inicio de TARV < Fecha del diagnóstico (HTS_TST)**
+  - Regla: La `Fecha inicio TARV`no debe ser menor que la `Fecha del diagnóstico`.
+- **CD4 vacío en diagnósticos positivos (HTS_TST)**
+  - Regla: Se verifica que si el `Resultado de la prueba es = Positivo`, el campo de `CD4 Basal` no debe estar vacío.
+- **TX_PVLS Numerador > TX_PVLS Denominador**
+  - Regla: Se verifica que el `Numerador` no sea  mayor que el `Denominador`.
+  - Variables que se revisan: **Sexo + Tipo de población + Rango de edad**.
+- **TX_PVLS Denominador > TX_CURR**
+  - Regla: Se verifica que el `Denominador` (TX_PVLS) no se mayor que el `TX_CURR`.
+  - Variables que se revisan: **Sexo + Tipo de población + Rango de edad**.
+- **TX_CURR ≠ Dispensación_TARV (cuadros dentro de TX_CURR)**
+  - Regla: Se verifica que el valor por sexo y rango de edad sea el mismo valor en ambos cuadros
+  - Variables que se revisan **Sexo y Rango de edad**.
+
+
+## 4. Segmentadores (filtros)
+- Se construyen con la unión de todos los errores detectados.
+- Orden: seleccionar **País** → filtra **Departamentos** → filtra **Sitios**.
+- Afectan **Resumen**, **% de error**, **Detalle** y **Métricas**.
+
+## 5. Métricas y % de error
+- **checks**: cantidad de combinaciones/filas evaluadas para una regla.
+- **errors**: cantidad de violaciones detectadas.
+- **% Error** = `errors / checks * 100`, mostrado global y por combinación
+  **(País, Depto, Sitio, Mes, Indicador)**.
+
+## 6. TX_CURR ≠ Dispensación_TARV
+- Se identifican ambos cuadros dentro de `TX_CURR`.
+- Se extraen totales por **Sexo + rangos de edad** y se comparan.
+- Se reporta: `TX_CURR`, `Dispensación_TARV`, **Diferencia** y si `Disp_TARV > TX_CURR`.
+
+## 7. Duplicados de ID (HTS_TST)
+- Columna buscada: **Id / Número de expediente** (nombres tolerantes).
+- Para cada **ID duplicado** se listan **todas las ocurrencias** con:
+  - País, Depto, Sitio, Mes, Archivo.
+  - **ID expediente**, **Resultado prueba VIH**, **Fila Excel**, **Columna Excel**, **Ocurrencias**.
+- Métrica: **errors = ocurrencias - 1** por cada ID.
+
+## 8. Exportación a Excel
+- Hojas:
+  - **Resumen** (conteo por tipo de error).
+  - **Una hoja por indicador** (con filas detectadas).
+  - **Métricas Globales (Selección)** y **Métricas por Mes**.
+- Se resalta en rojo la **columna crítica** de cada hoja de errores.
+
+## 9. Recomendaciones 
+- Cada error identificado de manera automatizada permitirá fortalecer y mejorar la capacitación del dato en campo, en las clínicas o durante el procesamiento de las bases de datos.  
+- Con base en la frecuencia de errores encontrados, podrán reforzar las indicaciones y el procedimiento sobre cómo se construye un indicador según la Guía MER.   
+  Puede que no existan **checks** válidos en esa selección; revisa filtros/fechas.
+- Mantener un registro histórico de los errores encontrados más frecuentes y tener documentado las acciones correctivas respaldará el seguimiento oportuno de cada país para asegurar la calidad del dato. 
+"""
+
+with st.expander("📖 Documentación (clic para ver)", expanded=False):
+    _DOC_MD = _build_doc_md()
+    st.markdown(_DOC_MD)
+    st.download_button(
+        "⬇️ Descargar documentación (Markdown)",
+        _DOC_MD.encode("utf-8"),
+        file_name="documentacion_validaciones.md",
+        mime="text/markdown",
+        use_container_width=True,
     )
 
 col_u1, col_u2 = st.columns([3, 2])
@@ -1040,6 +1125,7 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
 
 
