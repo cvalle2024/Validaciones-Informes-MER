@@ -46,12 +46,12 @@ def _build_doc_md() -> str:
 4. Usar **Segmentadores** (País / Departamento / Sitio).
 5. Revisar **Resumen**, **% de error**, **Detalle**, **Métricas**.
 6. **Descargar** Excel completo o filtrado.
-7.	Aplicar las correcciones necesarias para corregir o actualizar el dato alertado, antes del envío final a su jefatura inmediata.
+7. Aplicar los cambios necesarios para corregir o actualizar el dato alertado, antes del envío final a su jefatura inmediata.
 
 ## 3. Objetivos del Portal de Validaciones
 
 - Detectar errores comunes de forma anticipada, en las bases de datos locales de cada país, antes de cargar datos en DATIM.
-- Generar visualizaciones y una tabla resumen de los errores encontrados en los archivos cargados en el Portal.
+- Generar visualizaciones y una tabla resumen de los errores encontrados de los archivos cargados en el Portal.
 - Fortalecer la calidad y confiabilidad de los datos reportados por los equipos en cada país. 
 
 
@@ -1152,3 +1152,4 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
