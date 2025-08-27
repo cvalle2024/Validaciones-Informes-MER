@@ -77,22 +77,19 @@ def _build_doc_md() -> str:
 
 
 ## 4. Segmentadores (filtros)
-- Se construyen con la unión de todos los errores detectados.
-- Orden: seleccionar **País** → filtra **Departamentos** → filtra **Sitios**.
-- Afectan **Resumen**, **% de error**, **Detalle** y **Métricas**.
+- En esta sección podrá seleccionar:
+    - Orden: **País** → **Departamentos** → **Sitios**.
 
-## 5. Calculos y % de errores
-- **Revisado**: cantidad de combinaciones/filas evaluadas para una regla.
-- **Errores**: cantidad de errores detectadas.
-- **% Error** = `errors / checks * 100`, mostrado global y por combinación
-  **(País, Depto, Sitio, Mes, Indicador)**.
+## 5. Cálculos y % de errores
+- **Errores**: cantidad de errores encontrados.
+- **% Error** = `errores / chequeos * 100`.
 
-## 6. Exportación a Excel
+
+## 6. Archivo exportable Excel
 - Hojas:
-  - **Resumen** (conteo por tipo de error).
-  - **Una hoja por indicador** (con filas detectadas).
-  - **Métricas Globales (Selección)** y **Métricas por Mes**.
-- Se resalta en rojo la **columna crítica** de cada hoja de errores.
+  - **Resumen** (Número de errores encontrados por indicador).
+  - **Resumen de errores encontrados por indicador (en hojas separadas)**.`De no encontrarse errores no se mostrará la hoja en el archivo.`
+  - Se resalta en rojo la **columna con error** en cada hoja.
 
 ## 7. Recomendaciones 
 - Cada error identificado de manera automatizada permitirá fortalecer y mejorar la capacitación del dato en campo, en las clínicas o durante el procesamiento de las bases de datos.  
@@ -105,7 +102,7 @@ with st.expander("📖 Documentación (clic para ver)", expanded=False):
     _DOC_MD = _build_doc_md()
     st.markdown(_DOC_MD)
     st.download_button(
-        "⬇️ Descargar documentación (Markdown)",
+        "⬇️ Descargar documentación",
         _DOC_MD.encode("utf-8"),
         file_name="documentacion_validaciones.md",
         mime="text/markdown",
