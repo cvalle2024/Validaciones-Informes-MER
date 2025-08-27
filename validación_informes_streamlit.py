@@ -81,32 +81,20 @@ def _build_doc_md() -> str:
 - Orden: seleccionar **País** → filtra **Departamentos** → filtra **Sitios**.
 - Afectan **Resumen**, **% de error**, **Detalle** y **Métricas**.
 
-## 5. Métricas y % de error
-- **checks**: cantidad de combinaciones/filas evaluadas para una regla.
-- **errors**: cantidad de violaciones detectadas.
+## 5. Calculos y % de errores
+- **Revisado**: cantidad de combinaciones/filas evaluadas para una regla.
+- **Errores**: cantidad de errores detectadas.
 - **% Error** = `errors / checks * 100`, mostrado global y por combinación
   **(País, Depto, Sitio, Mes, Indicador)**.
 
-## 6. TX_CURR ≠ Dispensación_TARV
-- Se identifican ambos cuadros dentro de `TX_CURR`.
-- Se extraen totales por **Sexo + rangos de edad** y se comparan.
-- Se reporta: `TX_CURR`, `Dispensación_TARV`, **Diferencia** y si `Disp_TARV > TX_CURR`.
-
-## 7. Duplicados de ID (HTS_TST)
-- Columna buscada: **Id / Número de expediente** (nombres tolerantes).
-- Para cada **ID duplicado** se listan **todas las ocurrencias** con:
-  - País, Depto, Sitio, Mes, Archivo.
-  - **ID expediente**, **Resultado prueba VIH**, **Fila Excel**, **Columna Excel**, **Ocurrencias**.
-- Métrica: **errors = ocurrencias - 1** por cada ID.
-
-## 8. Exportación a Excel
+## 6. Exportación a Excel
 - Hojas:
   - **Resumen** (conteo por tipo de error).
   - **Una hoja por indicador** (con filas detectadas).
   - **Métricas Globales (Selección)** y **Métricas por Mes**.
 - Se resalta en rojo la **columna crítica** de cada hoja de errores.
 
-## 9. Recomendaciones 
+## 7. Recomendaciones 
 - Cada error identificado de manera automatizada permitirá fortalecer y mejorar la capacitación del dato en campo, en las clínicas o durante el procesamiento de las bases de datos.  
 - Con base en la frecuencia de errores encontrados, podrán reforzar las indicaciones y el procedimiento sobre cómo se construye un indicador según la Guía MER.   
   Puede que no existan **checks** válidos en esa selección; revisa filtros/fechas.
@@ -123,6 +111,7 @@ with st.expander("📖 Documentación (clic para ver)", expanded=False):
         mime="text/markdown",
         use_container_width=True,
     )
+
 
 col_u1, col_u2 = st.columns([3, 2])
 with col_u1:
@@ -173,10 +162,10 @@ IND_CURR_Q1Q2_DIFF  = "curr_q1q2_diff"    # TX_CURR ≠ Dispensación_TARV
 IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
 
 DISPLAY_NAMES = {
-    IND_NUM_GT_DEN:      "Numerador > Denominador",
-    IND_DEN_GT_CURR:     "Denominador > TX_CURR",
+    IND_NUM_GT_DEN:      "TX_PVLS (Num) > TX_PVLS (Den)",
+    IND_DEN_GT_CURR:     "TX_PVLS (Den) > TX_CURR",
     IND_CD4_MISSING:     "CD4 vacío positivo",
-    IND_TARV_LT_DIAG:    "Fecha TARV < Diagnóstico",
+    IND_TARV_LT_DIAG:    "Fecha de inicio TARV < Fecha de diagnóstico",
     IND_DIAG_BAD_FMT:    "Formato fecha diagnóstico",
     IND_CURR_Q1Q2_DIFF:  "TX_CURR ≠ Dispensación_TARV",
     IND_ID_DUPLICADO:    "ID (expediente) duplicado",
@@ -647,7 +636,7 @@ def procesar_hts_tst(
     if not all([col_resultado, col_cd4, col_diag]):
         return
 
-    fila_base_hts = idx_hts + 3
+    fila_base_hts = idx_hts + 2
     for i, row in df_data.iterrows():
         resultado  = str(_coerce_scalar(row.get(col_resultado))).strip().lower()
         cd4        = _coerce_scalar(row.get(col_cd4))
@@ -700,23 +689,64 @@ def procesar_hts_tst(
                 pass
 
         # Formato de Fecha Diagnóstico (si trae '/')
-        try:
-            fecha_texto = str(fecha_diag).strip()
-            if fecha_texto and "/" in fecha_texto:
-                _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
-                partes = fecha_texto.split("/")
-                if len(partes) == 3:
-                    dia, mes_, anio = partes
-                    if int(mes_) > 12: raise ValueError
-                    datetime.strptime(fecha_texto, "%d/%m/%Y")
-        except Exception:
-            _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
-            errores_formato_fecha_diag.append({
-                "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
-                "Archivo": nombre_archivo,
-                "Fecha del diagnóstico de la prueba": fecha_diag,
-                "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_diag
-            })
+        def _excel_serial_to_datetime(n):
+            # Excel: 1899-12-30 es el día 0 (corrige el bug del 1900)
+            base = datetime(1899, 12, 30)
+            days = int(float(n))
+            frac = float(n) - days
+            return base + timedelta(days=days) + timedelta(days=frac)
+
+        def es_fecha_valida(fecha_val):
+            """Devuelve True si fecha_val es interpretable como fecha válida."""
+            # Vacío/NaN no se valida aquí (se maneja afuera)
+            if isinstance(fecha_val, (pd.Timestamp, datetime)):
+                return True
+            
+        
+            # Serial numérico de Excel (p.ej. 45567)
+            if isinstance(fecha_val, (int, float)) and not (isinstance(fecha_val, float) and math.isnan(fecha_val)):
+                try:
+                    _excel_serial_to_datetime(fecha_val)
+                    return True
+                except Exception:
+                    return False
+
+    # Texto: probar varios formatos con dayfirst=True
+            s = str(fecha_val).strip()
+            if not s:
+                return False
+
+    # Normalizar separadores para aumentar tolerancia
+            s_norm = s.replace(".", "/").replace("-", "/")
+            try:
+        # Acepta: dd/mm/yyyy, dd/mm/yy, yyyy/mm/dd, yyyy/mm/d, etc.
+        # Si te importa estrictamente dd/mm/yyyy, cambia a format="%d/%m/%Y"
+                pd.to_datetime(s_norm, dayfirst=True, errors="raise")
+                return True
+            except Exception:
+                return False
+
+# === Bloque de validación por fila ===
+        fecha_val = fecha_diag  # el valor que ya traes de la fila
+
+# Contabiliza CHEQUEO solo si hay algún valor en la celda
+        tiene_valor = not (pd.isna(fecha_val) or str(fecha_val).strip() == "")
+        if tiene_valor:
+            _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+
+            if not es_fecha_valida(fecha_val):
+                _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+                errores_formato_fecha_diag.append({
+                    "País": pais_row,
+                    "Departamento": depto_row,
+                    "Sitio": sitio_row,
+                    "Mes de reporte": mes_rep,
+                    "Archivo": nombre_archivo,
+                    "Fecha del diagnóstico de la prueba": fecha_val,
+                    "Fila Excel": int(fila_base_hts + i),
+                    "Columna Excel": col_diag
+                })
+
 
     # Duplicados ID (ahora: una fila POR REGISTRO duplicado con Resultado VIH)
     if col_id:
@@ -759,7 +789,7 @@ def procesar_hts_tst(
                     sitio_row = sitio_row.strip()
                     mes_rep   = mes_rep.strip() or month_label_from_value(mes_inferido)
 
-                    fila_excel = int(idx_hts + 3 + i)
+                    fila_excel = int(idx_hts + 2 + i)
                     col_letter = get_column_letter(col_id_idx + 1) if col_id_idx is not None else col_id
                     resultado_vih_val = _coerce_scalar(r.get(col_resultado_vih)) if col_resultado_vih else ""
 
@@ -966,13 +996,13 @@ res = st.container(border=True)
 with res:
     st.subheader("⚫ *Resumen de errores por indicador*")
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-    c1.metric("*TX_PVLS Numerador > TX_PVLS Denominador*", len(df_num_f))
-    c2.metric("*TX_PVLS Denominador > TX_CURR*", len(df_txpv_f))
+    c1.metric("*TX_PVLS (Num) > TX_PVLS (Den)*", len(df_num_f))
+    c2.metric("*TX_PVLS (Den) > TX_CURR*", len(df_txpv_f))
     c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
-    c4.metric("*TARV < Diagnóstico*", len(df_tarv_f))
+    c4.metric("*Fecha de inicio TARV < Fecha del diagnóstico*", len(df_tarv_f))
     c5.metric("*Fecha diag. mal formateada*", len(df_fdiag_f))
     c6.metric("*TX_CURR ≠ Dispensación_TARV*", len(df_currq_f))
-    c7.metric("*ID duplicado*", len(df_iddup_f))
+    c7.metric("*ID duplicado - filas detectadas*", len(df_iddup_f))
 
 # 3) Indicadores – % de error (selección)
 sel = st.container(border=True)
@@ -984,17 +1014,17 @@ with sel:
     for col, key in zip(cols, cards):
         name = DISPLAY_NAMES[key]
         v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
-        col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} Num/Den")
+        col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} (error/chequeos)")
 
 # 4) Detalle por indicador
 det = st.container(border=True)
 with det:
     st.subheader("🔎 *Detalle por indicador*")
     tabs = st.tabs([
-        "Numerador > Denominador",
-        "Denominador > TX_CURR",
+        "TX_PVLS (Num) > TX_PVLS (Den)",
+        "TX_PVLS (Den) > TX_CURR",
         "CD4 vacío positivo",
-        "Fecha TARV < Diagnóstico",
+        "Fecha de inicio TARV < Fecha de diagnóstico",
         "Formato fecha diagnóstico",
         "TX_CURR ≠ Dispensación_TARV",
         "ID (expediente) duplicado",
@@ -1125,10 +1155,3 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-
-
-
-
-
-
