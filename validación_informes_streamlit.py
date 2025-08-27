@@ -27,7 +27,7 @@ with c_logo:
     st.image(logo_img, width=90)
 with c_title:
     st.title("✅ Portal de validación de indicadores MER (VIHCA)")
-    st.caption("TX_PVLS / TX_CURR / HTS_TST • Reglas por Sexo, Población, Rango de edad y campos clave")
+   
 
 
 def _build_doc_md() -> str:
@@ -1152,4 +1152,5 @@ with dl:
         st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
             file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
 
