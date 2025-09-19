@@ -73,9 +73,9 @@ def _build_doc_md() -> str:
 - **TX_CURR ≠ Dispensación_TARV (cuadros dentro de TX_CURR)**
   - Regla: Se verifica que el valor por sexo y rango de edad sea el mismo valor en ambos cuadros
   - Variables que se revisan **Sexo y Rango de edad**.
-
-
-## 4. Segmentadores (filtros)
+- **Verificación de Sexo (HTST)**
+  - Regla: Se verifica que en la columna Sexo, solo se registre `Femenino` o `Masculino`, si no vienen estas dos opciones el sistema detecta como error.
+  ## 4. Segmentadores (filtros)
 - En esta sección podrá seleccionar:
     - Orden: **País** → **Departamentos** → **Sitios**.
 
@@ -1189,4 +1189,5 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
 
