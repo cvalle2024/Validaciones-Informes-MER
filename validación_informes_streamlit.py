@@ -48,43 +48,53 @@ def _build_doc_md() -> str:
 7. Aplicar los cambios necesarios para corregir o actualizar el dato alertado, antes del envío final a su jefatura inmediata.
 
 ## 3. Objetivos del Portal de Validaciones
+
 - Detectar errores comunes de forma anticipada, en las bases de datos locales de cada país, antes de cargar datos en DATIM.
 - Generar visualizaciones y una tabla resumen de los errores encontrados de los archivos cargados en el Portal.
 - Fortalecer la calidad y confiabilidad de los datos reportados por los equipos en cada país. 
 
+
+
 ## 3. Indicadores y reglas que se validan
 - **Formato fecha diagnóstico (HTS_TST)**
-  - Regla: Utilizar formato de fecha `dd/mm/yyyy`.
+  - Regla: Utilizar formato de fehca `dd/mm/yyyy`.
 - **ID duplicado (HTS_TST)**
   - Regla: Se verifica que los registros de las pruebas no se repita el mismo ID en el trimestre.
 - **Fecha de inicio de TARV < Fecha del diagnóstico (HTS_TST)**
-  - Regla: La `Fecha inicio TARV` no debe ser menor que la `Fecha del diagnóstico`.
+  - Regla: La `Fecha inicio TARV`no debe ser menor que la `Fecha del diagnóstico`.
 - **CD4 vacío en diagnósticos positivos (HTS_TST)**
-  - Regla: Si el `Resultado de la prueba = Positivo`, el campo de `CD4 Basal` no debe estar vacío.
-- **Sexo inválido (HTS_TST)**
-  - Regla: Solo **Masculino** o **Femenino** (se normalizan variantes como “masc”, “fem”).
+  - Regla: Se verifica que si el `Resultado de la prueba es = Positivo`, el campo de `CD4 Basal` no debe estar vacío.
 - **TX_PVLS Numerador > TX_PVLS Denominador**
+  - Regla: Se verifica que el `Numerador` no sea  mayor que el `Denominador`.
   - Variables que se revisan: **Sexo + Tipo de población + Rango de edad**.
 - **TX_PVLS Denominador > TX_CURR**
+  - Regla: Se verifica que el `Denominador` (TX_PVLS) no se mayor que el `TX_CURR`.
   - Variables que se revisan: **Sexo + Tipo de población + Rango de edad**.
 - **TX_CURR ≠ Dispensación_TARV (cuadros dentro de TX_CURR)**
+  - Regla: Se verifica que el valor por sexo y rango de edad sea el mismo valor en ambos cuadros
   - Variables que se revisan **Sexo y Rango de edad**.
 
+
 ## 4. Segmentadores (filtros)
-- Orden: **País** → **Departamentos** → **Sitios**.
+- En esta sección podrá seleccionar:
+    - Orden: **País** → **Departamentos** → **Sitios**.
 
 ## 5. Cálculos y % de errores
 - **Errores**: cantidad de errores encontrados.
 - **% Error** = `errores / chequeos * 100`.
 
+
 ## 6. Archivo exportable Excel
 - Hojas:
   - **Resumen** (Número de errores encontrados por indicador).
-  - **Resumen de errores por indicador (en hojas separadas)**. `Si no hay errores, no se muestra la hoja.`
+  - **Resumen de errores encontrados por indicador (en hojas separadas)**.`De no encontrarse errores no se mostrará la hoja en el archivo.`
   - Se resalta en rojo la **columna con error** en cada hoja.
 
 ## 7. Recomendaciones 
-- Mantener un registro histórico de los errores encontrados y documentar acciones correctivas.
+- Cada error identificado de manera automatizada permitirá fortalecer y mejorar la capacitación del dato en campo, en las clínicas o durante el procesamiento de las bases de datos.  
+- Con base en la frecuencia de errores encontrados, podrán reforzar las indicaciones y el procedimiento sobre cómo se construye un indicador según la Guía MER.   
+  Puede que no existan **checks** válidos en esa selección; revisa filtros/fechas.
+- Mantener un registro histórico de los errores encontrados más frecuentes y tener documentado las acciones correctivas respaldará el seguimiento oportuno de cada país para asegurar la calidad del dato. 
 """
 
 with st.expander("📖 Documentación (clic para ver)", expanded=False):
@@ -1179,3 +1189,4 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
