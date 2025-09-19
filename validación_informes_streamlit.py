@@ -4,9 +4,10 @@ import os
 import re
 import zipfile
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Optional, Tuple, List, Dict
+import math
 from PIL import Image
 import pandas as pd
 import streamlit as st
@@ -27,8 +28,6 @@ with c_logo:
     st.image(logo_img, width=300)
 with c_title:
     st.title("✅ Portal de validación de indicadores MER (VIHCA)")
-   
-
 
 def _build_doc_md() -> str:
     return r"""
@@ -49,53 +48,43 @@ def _build_doc_md() -> str:
 7. Aplicar los cambios necesarios para corregir o actualizar el dato alertado, antes del envío final a su jefatura inmediata.
 
 ## 3. Objetivos del Portal de Validaciones
-
 - Detectar errores comunes de forma anticipada, en las bases de datos locales de cada país, antes de cargar datos en DATIM.
 - Generar visualizaciones y una tabla resumen de los errores encontrados de los archivos cargados en el Portal.
 - Fortalecer la calidad y confiabilidad de los datos reportados por los equipos en cada país. 
 
-
-
 ## 3. Indicadores y reglas que se validan
 - **Formato fecha diagnóstico (HTS_TST)**
-  - Regla: Utilizar formato de fehca `dd/mm/yyyy`.
+  - Regla: Utilizar formato de fecha `dd/mm/yyyy`.
 - **ID duplicado (HTS_TST)**
   - Regla: Se verifica que los registros de las pruebas no se repita el mismo ID en el trimestre.
 - **Fecha de inicio de TARV < Fecha del diagnóstico (HTS_TST)**
-  - Regla: La `Fecha inicio TARV`no debe ser menor que la `Fecha del diagnóstico`.
+  - Regla: La `Fecha inicio TARV` no debe ser menor que la `Fecha del diagnóstico`.
 - **CD4 vacío en diagnósticos positivos (HTS_TST)**
-  - Regla: Se verifica que si el `Resultado de la prueba es = Positivo`, el campo de `CD4 Basal` no debe estar vacío.
+  - Regla: Si el `Resultado de la prueba = Positivo`, el campo de `CD4 Basal` no debe estar vacío.
+- **Sexo inválido (HTS_TST)**
+  - Regla: Solo **Masculino** o **Femenino** (se normalizan variantes como “masc”, “fem”).
 - **TX_PVLS Numerador > TX_PVLS Denominador**
-  - Regla: Se verifica que el `Numerador` no sea  mayor que el `Denominador`.
   - Variables que se revisan: **Sexo + Tipo de población + Rango de edad**.
 - **TX_PVLS Denominador > TX_CURR**
-  - Regla: Se verifica que el `Denominador` (TX_PVLS) no se mayor que el `TX_CURR`.
   - Variables que se revisan: **Sexo + Tipo de población + Rango de edad**.
 - **TX_CURR ≠ Dispensación_TARV (cuadros dentro de TX_CURR)**
-  - Regla: Se verifica que el valor por sexo y rango de edad sea el mismo valor en ambos cuadros
   - Variables que se revisan **Sexo y Rango de edad**.
 
-
 ## 4. Segmentadores (filtros)
-- En esta sección podrá seleccionar:
-    - Orden: **País** → **Departamentos** → **Sitios**.
+- Orden: **País** → **Departamentos** → **Sitios**.
 
 ## 5. Cálculos y % de errores
 - **Errores**: cantidad de errores encontrados.
 - **% Error** = `errores / chequeos * 100`.
 
-
 ## 6. Archivo exportable Excel
 - Hojas:
   - **Resumen** (Número de errores encontrados por indicador).
-  - **Resumen de errores encontrados por indicador (en hojas separadas)**.`De no encontrarse errores no se mostrará la hoja en el archivo.`
+  - **Resumen de errores por indicador (en hojas separadas)**. `Si no hay errores, no se muestra la hoja.`
   - Se resalta en rojo la **columna con error** en cada hoja.
 
 ## 7. Recomendaciones 
-- Cada error identificado de manera automatizada permitirá fortalecer y mejorar la capacitación del dato en campo, en las clínicas o durante el procesamiento de las bases de datos.  
-- Con base en la frecuencia de errores encontrados, podrán reforzar las indicaciones y el procedimiento sobre cómo se construye un indicador según la Guía MER.   
-  Puede que no existan **checks** válidos en esa selección; revisa filtros/fechas.
-- Mantener un registro histórico de los errores encontrados más frecuentes y tener documentado las acciones correctivas respaldará el seguimiento oportuno de cada país para asegurar la calidad del dato. 
+- Mantener un registro histórico de los errores encontrados y documentar acciones correctivas.
 """
 
 with st.expander("📖 Documentación (clic para ver)", expanded=False):
@@ -108,7 +97,6 @@ with st.expander("📖 Documentación (clic para ver)", expanded=False):
         mime="text/markdown",
         use_container_width=True,
     )
-
 
 col_u1, col_u2 = st.columns([3, 2])
 with col_u1:
@@ -138,6 +126,7 @@ for key, val in {
     "df_fdiag": pd.DataFrame(),    # Formato fecha diagnóstico
     "df_currq": pd.DataFrame(),    # TX_CURR ≠ Dispensación_TARV
     "df_iddup": pd.DataFrame(),    # ID (expediente) duplicado
+    "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)  <-- nuevo
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
 }.items():
@@ -157,6 +146,7 @@ IND_TARV_LT_DIAG    = "tarv_lt_diag"
 IND_DIAG_BAD_FMT    = "diag_bad_format"
 IND_CURR_Q1Q2_DIFF  = "curr_q1q2_diff"    # TX_CURR ≠ Dispensación_TARV
 IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
+IND_SEXO_INVALID    = "sexo_invalid"      # <-- nuevo
 
 DISPLAY_NAMES = {
     IND_NUM_GT_DEN:      "TX_PVLS (Num) > TX_PVLS (Den)",
@@ -166,6 +156,7 @@ DISPLAY_NAMES = {
     IND_DIAG_BAD_FMT:    "Formato fecha diagnóstico",
     IND_CURR_Q1Q2_DIFF:  "TX_CURR ≠ Dispensación_TARV",
     IND_ID_DUPLICADO:    "ID (expediente) duplicado",
+    IND_SEXO_INVALID:    "Sexo inválido (HTS_TST)",   # <-- nuevo
 }
 
 MESES = {
@@ -594,10 +585,11 @@ def procesar_tx_curr_cuadros(
                 "Disp_TARV > TX_CURR": "Sí" if v_et > v_tx else "No",
             })
 
-# ===== HTS_TST + ID Duplicado =====
+# ===== HTS_TST + ID Duplicado + Sexo inválido + CD4 vacío positivo =====
 def procesar_hts_tst(
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
-    errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup
+    errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup,
+    errores_sexo   # <-- nuevo
 ):
     if "HTS_TST" not in xl.sheet_names:
         return
@@ -613,7 +605,6 @@ def procesar_hts_tst(
 
     # Columnas base
     col_resultado = _first_col(df_data, "resultado")  # genérico
-    # Resultado específico de VIH (si existe)
     col_resultado_vih = (
         _first_col(df_data, "resultado", "vih") or
         _first_col(df_data, "resultado de la prueba de vih") or
@@ -629,9 +620,38 @@ def procesar_hts_tst(
                      _first_col(df_data, "numero", "expediente") or
                      _first_col(df_data, "número", "expediente") or
                      _first_col(df_data, "id"))
+    col_sexo      = _first_col(df_data, "sexo") or _first_col(df_data, "genero") or _first_col(df_data, "género")  # <-- nuevo
+    col_motivo    = _first_col(df_data, "motivo", "cd4")  # <-- nuevo (Motivo de no CD4)
 
     if not all([col_resultado, col_cd4, col_diag]):
         return
+
+    # Helpers de fecha
+    def _excel_serial_to_datetime(n):
+        base = datetime(1899, 12, 30)  # Excel bug 1900
+        days = int(float(n))
+        frac = float(n) - days
+        return base + timedelta(days=days) + timedelta(days=frac)
+
+    def es_fecha_valida(fecha_val) -> bool:
+        # NaN / vacío no se valida aquí (se hace afuera via tiene_valor)
+        if isinstance(fecha_val, (pd.Timestamp, datetime)):
+            return True
+        if isinstance(fecha_val, (int, float)) and not (isinstance(fecha_val, float) and math.isnan(fecha_val)):
+            try:
+                _excel_serial_to_datetime(fecha_val)
+                return True
+            except Exception:
+                return False
+        s = str(fecha_val).strip()
+        if not s:
+            return False
+        s_norm = s.replace(".", "/").replace("-", "/")
+        try:
+            pd.to_datetime(s_norm, dayfirst=True, errors="raise")
+            return True
+        except Exception:
+            return False
 
     fila_base_hts = idx_hts + 2
     for i, row in df_data.iterrows():
@@ -650,21 +670,48 @@ def procesar_hts_tst(
         sitio_row  = str(sitio).strip()
         mes_rep    = str(mes_rep).strip() or month_label_from_value(mes_inferido)
 
-        # CHECK para duplicados (para %)
+        # === Validación de SEXO permitido (cuenta chequeo si hay algo en celda) ===
+        if col_sexo is not None:
+            sx_raw = _coerce_scalar(row.get(col_sexo))
+            if not (pd.isna(sx_raw) or str(sx_raw).strip() == ""):
+                _add_metric(IND_SEXO_INVALID, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+                sx_norm = _normalize_sexo(sx_raw)
+                if sx_norm not in ["Masculino", "Femenino"]:
+                    _add_metric(IND_SEXO_INVALID, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+                    errores_sexo.append({
+                        "País": pais_row,
+                        "Departamento": depto_row,
+                        "Sitio": sitio_row,
+                        "Mes de reporte": mes_rep,
+                        "Archivo": nombre_archivo,
+                        "Sexo (valor encontrado)": str(sx_raw).strip(),
+                        "Sugerido (normalizado)": sx_norm if sx_norm in ["Masculino","Femenino"] else "",
+                        "Fila Excel": int(fila_base_hts + i),
+                        "Columna Excel": col_sexo
+                    })
+
+        # CHECK duplicados (para %)
         if col_id is not None:
             id_val = _coerce_scalar(row.get(col_id))
             if pd.notna(id_val) and str(id_val).strip():
                 _add_metric(IND_ID_DUPLICADO, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
 
-        # CD4 vacío cuando Resultado = Positivo
+        # CD4 vacío cuando Resultado = Positivo (agrega Motivo de no CD4 después de Resultado)
         if resultado == "positivo":
             _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
             if pd.isna(cd4) or str(cd4).strip() == "":
                 _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
                 errores_cd4.append({
-                    "País": pais_row, "Departamento": depto_row, "Sitio": sitio_row, "Mes de reporte": mes_rep,
-                    "Archivo": nombre_archivo, "Resultado": "Positivo", "CD4 Basal": "",
-                    "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_cd4
+                    "País": pais_row,
+                    "Departamento": depto_row,
+                    "Sitio": sitio_row,
+                    "Mes de reporte": mes_rep,
+                    "Archivo": nombre_archivo,
+                    "Resultado": "Positivo",
+                    "Motivo de no CD4": ("" if col_motivo is None else str(_coerce_scalar(row.get(col_motivo))).strip()),
+                    "CD4 Basal": "",
+                    "Fila Excel": int(fila_base_hts + i),
+                    "Columna Excel": col_cd4
                 })
 
         # Fecha TARV < Diagnóstico
@@ -685,53 +732,11 @@ def procesar_hts_tst(
             except Exception:
                 pass
 
-        # Formato de Fecha Diagnóstico (si trae '/')
-        def _excel_serial_to_datetime(n):
-            # Excel: 1899-12-30 es el día 0 (corrige el bug del 1900)
-            base = datetime(1899, 12, 30)
-            days = int(float(n))
-            frac = float(n) - days
-            return base + timedelta(days=days) + timedelta(days=frac)
-
-        def es_fecha_valida(fecha_val):
-            """Devuelve True si fecha_val es interpretable como fecha válida."""
-            # Vacío/NaN no se valida aquí (se maneja afuera)
-            if isinstance(fecha_val, (pd.Timestamp, datetime)):
-                return True
-            
-        
-            # Serial numérico de Excel (p.ej. 45567)
-            if isinstance(fecha_val, (int, float)) and not (isinstance(fecha_val, float) and math.isnan(fecha_val)):
-                try:
-                    _excel_serial_to_datetime(fecha_val)
-                    return True
-                except Exception:
-                    return False
-
-    # Texto: probar varios formatos con dayfirst=True
-            s = str(fecha_val).strip()
-            if not s:
-                return False
-
-    # Normalizar separadores para aumentar tolerancia
-            s_norm = s.replace(".", "/").replace("-", "/")
-            try:
-        # Acepta: dd/mm/yyyy, dd/mm/yy, yyyy/mm/dd, yyyy/mm/d, etc.
-        # Si te importa estrictamente dd/mm/yyyy, cambia a format="%d/%m/%Y"
-                pd.to_datetime(s_norm, dayfirst=True, errors="raise")
-                return True
-            except Exception:
-                return False
-
-# === Bloque de validación por fila ===
-        fecha_val = fecha_diag  # el valor que ya traes de la fila
-
-# Contabiliza CHEQUEO solo si hay algún valor en la celda
-        tiene_valor = not (pd.isna(fecha_val) or str(fecha_val).strip() == "")
+        # Formato de Fecha Diagnóstico (si celda tiene valor)
+        tiene_valor = not (pd.isna(fecha_diag) or str(fecha_diag).strip() == "")
         if tiene_valor:
             _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
-
-            if not es_fecha_valida(fecha_val):
+            if not es_fecha_valida(fecha_diag):
                 _add_metric(IND_DIAG_BAD_FMT, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
                 errores_formato_fecha_diag.append({
                     "País": pais_row,
@@ -739,13 +744,12 @@ def procesar_hts_tst(
                     "Sitio": sitio_row,
                     "Mes de reporte": mes_rep,
                     "Archivo": nombre_archivo,
-                    "Fecha del diagnóstico de la prueba": fecha_val,
+                    "Fecha del diagnóstico de la prueba": fecha_diag,
                     "Fila Excel": int(fila_base_hts + i),
                     "Columna Excel": col_diag
                 })
 
-
-    # Duplicados ID (ahora: una fila POR REGISTRO duplicado con Resultado VIH)
+    # Duplicados ID (una fila POR REGISTRO duplicado con Resultado VIH)
     if col_id:
         try:
             col_id_idx = list(df_data.columns).index(col_id)
@@ -760,7 +764,6 @@ def procesar_hts_tst(
         if not duplicados.empty:
             for id_val, count in duplicados.items():
                 idxs = df_data.index[ids_raw == id_val].tolist()
-                # Suma de errores para métricas (ocurrencias - 1 por ID duplicado)
                 r_ref = df_data.loc[idxs[0]]
                 ref_pais  = str(_coerce_scalar(r_ref.get(col_pais)))  if col_pais  else pais_inferido
                 ref_depto = str(_coerce_scalar(r_ref.get(col_depto))) if col_depto else ""
@@ -773,7 +776,6 @@ def procesar_hts_tst(
                             ref_sitio.strip(),
                             errors_add=int(count) - 1)
 
-                # Fila por registro duplicado
                 for i in idxs:
                     r = df_data.loc[i]
                     pais_row  = str(_coerce_scalar(r.get(col_pais)))  if col_pais  else pais_inferido
@@ -835,6 +837,7 @@ if procesar:
     errores_formato_fecha_diag = []
     errores_currq = []
     errores_iddup = []
+    errores_sexo = []  # <-- nuevo
 
     st.session_state.metrics_global = defaultdict(lambda: {"errors": 0, "checks": 0})
     st.session_state.metrics_by_pds = defaultdict(lambda: {"errors": 0, "checks": 0})
@@ -845,7 +848,9 @@ if procesar:
             pais_inf, mes_inf = inferir_pais_mes(ruta_rel.replace("\\", "/"), default_pais, default_mes)
             xl = leer_excel_desde_bytes(nombre_archivo, data_bytes)
             procesar_tx_pvls_y_curr(xl, pais_inf, mes_inf, nombre_archivo, errores_numerador, errores_txpvls)
-            procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo, errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup)
+            procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo,
+                             errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup,
+                             errores_sexo)  # <-- nuevo
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
         except Exception as e:
             st.warning(f"⚠️ Error procesando {nombre_archivo}: {e}")
@@ -858,6 +863,7 @@ if procesar:
     st.session_state.df_fdiag = pd.DataFrame(errores_formato_fecha_diag)
     st.session_state.df_currq = pd.DataFrame(errores_currq)
     st.session_state.df_iddup = pd.DataFrame(errores_iddup)
+    st.session_state.df_sexo  = pd.DataFrame(errores_sexo)  # <-- nuevo
     st.session_state.processed = True
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
 
@@ -869,7 +875,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup"]:
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup","df_sexo"]:
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -879,17 +885,18 @@ for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_i
             if col not in df.columns:
                 st.session_state[dfname][col] = ""
 
-# Universo para segmentadores a partir de TODOS los errores
+# Universo para segmentadores
 df_all = pd.concat(
     [df for df in [
         st.session_state.df_num, st.session_state.df_txpv, st.session_state.df_cd4,
         st.session_state.df_tarv, st.session_state.df_fdiag, st.session_state.df_currq,
-        st.session_state.df_iddup
+        st.session_state.df_iddup, st.session_state.df_sexo  # <-- nuevo
     ] if isinstance(df, pd.DataFrame) and not df.empty],
     ignore_index=True
-) if any([isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
-          for k in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup"]]) \
-  else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
+) if any([
+    isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
+    for k in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup","df_sexo"]
+]) else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
 for c in ["País","Departamento","Sitio","Mes de reporte"]:
     if c in df_all.columns:
@@ -950,6 +957,7 @@ df_tarv_f  = _aplicar_filtro(st.session_state.df_tarv)
 df_fdiag_f = _aplicar_filtro(st.session_state.df_fdiag)
 df_currq_f = _aplicar_filtro(st.session_state.df_currq)
 df_iddup_f = _aplicar_filtro(st.session_state.df_iddup)
+df_sexo_f  = _aplicar_filtro(st.session_state.df_sexo)  # <-- nuevo
 
 # Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
@@ -992,7 +1000,7 @@ df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selecti
 res = st.container(border=True)
 with res:
     st.subheader("⚫ *Resumen de errores por indicador*")
-    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
     c1.metric("*TX_PVLS (Num) > TX_PVLS (Den)*", len(df_num_f))
     c2.metric("*TX_PVLS (Den) > TX_CURR*", len(df_txpv_f))
     c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
@@ -1000,12 +1008,14 @@ with res:
     c5.metric("*Fecha diag. mal formateada*", len(df_fdiag_f))
     c6.metric("*TX_CURR ≠ Dispensación_TARV*", len(df_currq_f))
     c7.metric("*ID duplicado - filas detectadas*", len(df_iddup_f))
+    c8.metric("*Sexo inválido (HTS_TST)*", len(df_sexo_f))  # <-- nuevo
 
 # 3) Indicadores – % de error (selección)
 sel = st.container(border=True)
 with sel:
     st.subheader("📊 *Porcentaje de errores por indicador*")
-    cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO]
+    cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG,
+             IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO, IND_SEXO_INVALID]  # <-- nuevo
     cols = st.columns(len(cards))
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
     for col, key in zip(cols, cards):
@@ -1025,6 +1035,7 @@ with det:
         "Formato fecha diagnóstico",
         "TX_CURR ≠ Dispensación_TARV",
         "ID (expediente) duplicado",
+        "Sexo inválido (HTS_TST)",  # <-- nuevo
     ])
     with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=340)
     with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=340)
@@ -1033,6 +1044,7 @@ with det:
     with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —", height=340)
     with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=340)
     with tabs[6]: show_df_or_note(df_iddup_f, "— Sin IDs (expediente) duplicados —", height=340)
+    with tabs[7]: show_df_or_note(df_sexo_f,  "— Sin filas con sexo inválido —", height=340)
 
 # 5) Métricas de calidad (adaptadas al filtro)
 met = st.container(border=True)
@@ -1050,14 +1062,16 @@ with met:
 # ---------- DESCARGA --------
 # ============================
 def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df_metricas_group: pd.DataFrame) -> bytes:
+    # Soporta uno o varios campos por hoja a resaltar (lista o string)
     config_resaltado = {
         "Numerador > Denominador": "Numerador",
         "Denominador > TX_CURR": "Denominador (PVLS)",
-        "CD4 vacío positivo": "CD4 Basal",
+        "CD4 vacío positivo": ["CD4 Basal", "Motivo de no CD4"],  # <-- ahora lista
         "Fecha TARV < Diagnóstico": "Fecha inicio TARV",
         "Formato fecha diagnóstico": "Fecha del diagnóstico de la prueba",
         "TX_CURR ≠ Dispensación_TARV": "Diferencia (TX_CURR - Disp_TARV)",
         "ID (expediente) duplicado": "ID expediente",
+        "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",  # <-- nuevo
     }
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -1087,10 +1101,13 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         if not target: continue
         ws = wb[target]
         campo_rojo = config_resaltado.get(nombre)
-        if campo_rojo and campo_rojo in df.columns:
-            col_idx = list(df.columns).index(campo_rojo) + 1
-            for row in range(2, ws.max_row + 1):
-                ws.cell(row=row, column=col_idx).fill = rojo
+        if campo_rojo:
+            campos = campo_rojo if isinstance(campo_rojo, list) else [campo_rojo]
+            for camp in campos:
+                if camp in df.columns:
+                    col_idx = list(df.columns).index(camp) + 1
+                    for row in range(2, ws.max_row + 1):
+                        ws.cell(row=row, column=col_idx).fill = rojo
         ws.auto_filter.ref = ws.dimensions
 
     out = io.BytesIO(); wb.save(out); out.seek(0)
@@ -1104,6 +1121,7 @@ full_dict = {
     "Formato fecha diagnóstico": st.session_state.df_fdiag,
     "TX_CURR ≠ Dispensación_TARV": st.session_state.df_currq,
     "ID (expediente) duplicado": st.session_state.df_iddup,
+    "Sexo inválido (HTS_TST)": st.session_state.df_sexo,  # <-- nuevo
 }
 
 rows_metrics_global = [
@@ -1137,6 +1155,7 @@ filt_dict = {
     "Formato fecha diagnóstico": df_fdiag_f,
     "TX_CURR ≠ Dispensación_TARV": df_currq_f,
     "ID (expediente) duplicado": df_iddup_f,
+    "Sexo inválido (HTS_TST)": df_sexo_f,  # <-- nuevo
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
@@ -1145,14 +1164,18 @@ dl = st.container(border=True)
 with dl:
     cdl1, cdl2 = st.columns(2)
     with cdl1:
-        st.download_button("⬇️ Descargar Excel (COMPLETO)", data=bytes_excel_full,
-            file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button(
+            "⬇️ Descargar Excel (COMPLETO)",
+            data=bytes_excel_full,
+            file_name=f"Errores_validaciones_FULL_{fecha_str}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
     with cdl2:
-        st.download_button("⬇️ Descargar Excel (FILTRADO)", data=bytes_excel_filt,
-            file_name=f"Errorese encontrados en: _{pais}_{fecha_str}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-
-
-
-
+        st.download_button(
+            "⬇️ Descargar Excel (FILTRADO)",
+            data=bytes_excel_filt,
+            file_name=f"Errores_validaciones_FILTRADO_{fecha_str}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
