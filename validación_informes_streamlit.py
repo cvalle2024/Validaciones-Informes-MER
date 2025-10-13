@@ -1185,9 +1185,10 @@ with dl:
         st.download_button(
             "⬇️ Descargar Excel (FILTRADO)",
             data=bytes_excel_filt,
-            file_name=f"Errores_validaciones_FILTRADO_{fecha_str}.xlsx",
+            file_name=f"Errores_validaciones_ {pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
 
 
