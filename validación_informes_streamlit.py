@@ -1177,7 +1177,7 @@ with dl:
         st.download_button(
             "⬇️ Descargar Excel (COMPLETO)",
             data=bytes_excel_full,
-            file_name=f"Errores_validaciones_FULL_{fecha_str}.xlsx",
+            file_name=f"Errores_validaciones_{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
@@ -1189,6 +1189,7 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
 
 
 
