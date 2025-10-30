@@ -823,19 +823,19 @@ def procesar_hts_tst(
                     })
 
 # ===== VALIDACIÓN TX_ML: Fecha de su última cita esperada + Modalidad =====
-def procesar_tx_ml_cita(
+def procesar_tx_ml_cita(  # TX_ML
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
     errores_txml_cita
 ):
     """
     Valida que en la hoja TX_ML la columna 'Fecha de su última cita esperada' NO venga vacía.
-    Aplica FILTRO por Sitio (solo reporta filas cuando 'Sitio' tiene información).
-    Incluye 'Modalidad de reporte' y la coloca después de 'ID expediente' en la salida.
+    Además agrega 'Modalidad de reporte' en la salida, colocándola justo después de 'ID expediente'.
     """
     sheet_name = "TX_ML"
     if sheet_name not in xl.sheet_names:
         return
 
+    # Leemos en crudo y buscamos encabezado por tokens normalizados
     df_raw = xl.parse(sheet_name, header=None)
     nrows, ncols = df_raw.shape
 
@@ -846,35 +846,46 @@ def procesar_tx_ml_cita(
                 return True
         return False
 
+    # Buscamos la fila de encabezado por la presencia de la columna objetivo
+    # Tokens robustos: "fecha" + "ultima" + "cita" + "esper"
     idx_header = None
     for r in range(nrows):
         row_vals = df_raw.iloc[r].tolist()
         if _row_has_tokens_norm(row_vals, ["fecha", "ultima", "cita", "esper"]):
-            idx_header = r; break
+            idx_header = r
+            break
+
+    # Fallback (tolerante): intenta por "fecha" + "cita"
     if idx_header is None:
         for r in range(nrows):
             row_vals = df_raw.iloc[r].tolist()
             if _row_has_tokens_norm(row_vals, ["fecha", "cita"]):
-                idx_header = r; break
-    if idx_header is None:
-        return
+                idx_header = r
+                break
 
+    if idx_header is None:
+        return  # No se detectó la cabecera de la tabla TX_ML
+
+    # Normalizamos tabla
     df_data, columnas = normalizar_tabla_por_encabezado(df_raw, idx_header)
     df_data = _rename_standard_columns(df_data)
 
+    # Localizamos la columna objetivo (muy tolerante a variantes)
     col_cita_esperada = (
         buscar_columna_multi(df_data.columns, "fecha", "ultima", "cita", "esper")
         or buscar_columna_multi(df_data.columns, "fecha", "cita", "esper")
         or buscar_columna_multi(df_data.columns, "fecha", "cita")
     )
     if not col_cita_esperada:
-        return
+        return  # No existe la columna en esta plantilla
 
+    # Modalidad de reporte (si existe en plantilla)
     col_modalidad = (
         buscar_columna_multi(df_data.columns, "modalidad", "reporte")
         or buscar_columna_multi(df_data.columns, "modalidad")
     )
 
+    # Contexto (País/Depto/Sitio/Mes)
     col_pais      = buscar_columna_multi(df_data.columns, "pais")
     col_depto     = (buscar_columna_multi(df_data.columns, "departamento") or
                      buscar_columna_multi(df_data.columns, "depto") or
@@ -890,27 +901,31 @@ def procesar_tx_ml_cita(
                      buscar_columna_multi(df_data.columns, "id"))
 
     col_cita_exp_idx = df_data.columns.tolist().index(col_cita_esperada)
-    fila_base_txml = idx_header + 2
+    fila_base_txml = idx_header + 2  # coherente con otras tablas
 
     for i, row in df_data.iterrows():
-        # Señal mínima de fila
+        # Señal mínima de "fila real": ID/Sitio/País con algo o el campo objetivo con algo
         row_has_signal = any(
             str(_coerce_scalar(row.get(c))).strip()
             for c in [col_id, col_sitio, col_pais]
             if c is not None
         ) or not (pd.isna(row.get(col_cita_esperada)) or str(row.get(col_cita_esperada)).strip() == "")
+
         if not row_has_signal:
-            continue
+            continue  # ignora filas completamente vacías
 
         # Contexto
         p = str(_coerce_scalar(row.get(col_pais))) if col_pais else pais_inferido
         d = str(_coerce_scalar(row.get(col_depto))) if col_depto else ""
         s = str(_coerce_scalar(row.get(col_sitio))) if col_sitio else ""
-        if not _is_nonempty_site(s):
-            continue  # ← filtro SOLO aquí (TX_ML)
 
         raw_mes = row.get(col_fecha_rep) if col_fecha_rep else (row.get(col_mesrep) if col_mesrep else None)
         m = month_label_from_value(raw_mes) or month_label_from_value(mes_inferido)
+
+        p = p.strip() or pais_inferido
+        d = d.strip()
+        s = s.strip()
+        m = m.strip() or month_label_from_value(mes_inferido)
 
         # Chequeo + posible error
         _add_metric(IND_TXML_CITA_VACIA, p, m, d, s, checks_add=1)
@@ -918,10 +933,10 @@ def procesar_tx_ml_cita(
         if pd.isna(v_exp) or str(v_exp).strip() == "":
             _add_metric(IND_TXML_CITA_VACIA, p, m, d, s, errors_add=1)
             errores_txml_cita.append({
-                "País": p.strip(),
-                "Departamento": d.strip(),
-                "Sitio": s.strip(),
-                "Mes de reporte": m.strip(),
+                "País": p,
+                "Departamento": d,
+                "Sitio": s,
+                "Mes de reporte": m,
                 "Archivo": nombre_archivo,
                 "ID expediente": str(_coerce_scalar(row.get(col_id))).strip() if col_id else "",
                 "Modalidad de reporte": str(_coerce_scalar(row.get(col_modalidad))).strip() if col_modalidad else "",
@@ -929,7 +944,6 @@ def procesar_tx_ml_cita(
                 "Fila Excel": int(fila_base_txml + i),
                 "Columna Excel": get_column_letter(col_cita_exp_idx + 1)
             })
-
 
 # ============================
 # --------- PROCESO ----------
