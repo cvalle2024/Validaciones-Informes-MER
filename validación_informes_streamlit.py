@@ -29,24 +29,6 @@ with c_logo:
 with c_title:
     st.title("✅ Portal de validación de indicadores MER (VIHCA)")
 
-# --- Estilo: tabs con scroll horizontal (Detalle por indicador)
-st.markdown("""
-<style>
-/* Hace desplazable horizontalmente la barra de pestañas */
-.stTabs [data-baseweb="tab-list"]{
-  overflow-x: auto !important;
-  overflow-y: hidden;
-  white-space: nowrap;
-  gap: .5rem;
-  padding-bottom: 2px;
-  scrollbar-width: thin;  /* Firefox */
-}
-.stTabs [data-baseweb="tab"]{
-  flex: 0 0 auto;         /* evita que las tabs se encojan y permite el scroll */
-}
-</style>
-""", unsafe_allow_html=True)
-
 def _build_doc_md() -> str:
     return r"""
 # 📖 Documentación – Validaciones de indicadores MER
@@ -155,7 +137,7 @@ for key, val in {
     "df_currq": pd.DataFrame(),    # TX_CURR ≠ Dispensación_TARV
     "df_iddup": pd.DataFrame(),    # ID (expediente) duplicado
     "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)
-    "df_txml_cita": pd.DataFrame(),  # TX_ML (salida de errores)
+    "df_txml_cita": pd.DataFrame(),  # <-- TX_ML
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
 }.items():
@@ -178,7 +160,7 @@ IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
 IND_SEXO_INVALID    = "sexo_invalid"      # Sexo inválido (HTS_TST)
 
 # --- Indicador TX_ML
-IND_TXML_CITA_VACIA = "txml_cita_vacia"   # TX_ML
+IND_TXML_CITA_VACIA = "txml_cita_vacia"  # TX_ML
 
 DISPLAY_NAMES = {
     IND_NUM_GT_DEN:      "TX_PVLS (Num) > TX_PVLS (Den)",
@@ -351,11 +333,6 @@ def show_df_or_note(df, note="— Sin filas para mostrar —", height=300):
         st.caption(note); return False
     st.dataframe(df, use_container_width=True, height=height); return True
 
-# --- NUEVO: helper para filtrar registros sin sitio
-def _is_nonempty_site(x) -> bool:
-    s = str(_coerce_scalar(x)).strip()
-    return bool(s) and s.lower() not in {"nan","none","null","desconocido","sin dato","s/d","n/a","na","0"}
-
 # ============================
 # ------- VALIDACIONES -------
 # ============================
@@ -390,12 +367,8 @@ def procesar_tx_pvls_y_curr(
 
     # País/Depto/Sitio
     col_pais   = buscar_columna_multi(df_data.columns, "pais")
-    col_depto  = (buscar_columna_multi(df_data.columns, "departamento") or
-                  buscar_columna_multi(df_data.columns, "depto") or
-                  buscar_columna_multi(df_data.columns, "provincia"))
-    col_sitio  = (buscar_columna_multi(df_data.columns, "servicio", "salud") or
-                  buscar_columna_multi(df_data.columns, "sitio") or
-                  buscar_columna_multi(df_data.columns, "clinica"))
+    col_depto  = buscar_columna_multi(df_data.columns, "departamento") or buscar_columna_multi(df_data.columns, "depto") or buscar_columna_multi(df_data.columns, "provincia")
+    col_sitio  = buscar_columna_multi(df_data.columns, "servicio", "salud") or buscar_columna_multi(df_data.columns, "sitio") or buscar_columna_multi(df_data.columns, "clinica")
 
     # Fecha/Mes de reporte (prioridad)
     col_fecha_rep = buscar_columna_multi(df_data.columns, "fecha", "reporte")
@@ -424,8 +397,6 @@ def procesar_tx_pvls_y_curr(
         if row_den.empty: continue
         row_den = row_den.iloc[0]
         pais_row, depto_row, sitio_row, mes_rep = _ctx(row_num)
-        if not _is_nonempty_site(sitio_row):
-            continue  # ← ignora filas sin Sitio
 
         for col in columnas_edad:
             val_num = numeros_seguro(row_num.get(col))
@@ -458,12 +429,9 @@ def procesar_tx_pvls_y_curr(
             row_curr = df_curr[(df_curr["Sexo"].astype(str).str.strip()==sexo) &
                                (df_curr["Tipo de población"].astype(str).str.strip()==pob)]
             if row_curr.empty: continue
+            row_curr = row_curr.iloc[0]
 
             pais_row, depto_row, sitio_row, mes_rep = _ctx(row_den)
-            if not _is_nonempty_site(sitio_row):
-                continue  # ← ignora filas sin Sitio
-
-            row_curr = row_curr.iloc[0]
             for col in columnas_edad:
                 val_den = numeros_seguro(row_den.get(col))
                 val_curr = numeros_seguro(row_curr.get(col))
@@ -608,17 +576,15 @@ def procesar_tx_curr_cuadros(
                 v = fallback
             v = str(v).strip()
             return v if v else fallback
-        p = _val(col_pais_i, "")
+        p = _val(col_pais_i, pais_inferido)
         d = _val(col_depto_i, "")
         s = _val(col_sitio_i, "")
         raw_mes = row_vals[col_mesrep_i] if col_mesrep_i is not None else None
-        m = month_label_from_value(raw_mes) or ""
+        m = month_label_from_value(raw_mes) or month_label_from_value(mes_inferido)
         return p, d, s, m
 
     fila_ctx_vals = df_raw.iloc[hdr_tx + 1].fillna("").astype(str).tolist() if (hdr_tx + 1) < nrows else []
     pais_row, depto_row, sitio_row, mes_rep = _ctx_from_rowvals(fila_ctx_vals)
-    if not _is_nonempty_site(sitio_row):
-        return  # ← si no hay Sitio, no reportar nada de esta hoja
 
     all_keys = set(totals_tx.keys()) | set(totals_et.keys())
     for (sexo, edad_key) in sorted(all_keys):
@@ -711,17 +677,15 @@ def procesar_hts_tst(
         fecha_diag = _coerce_scalar(row.get(col_diag))
         fecha_tarv = _coerce_scalar(row.get(col_tarv)) if col_tarv else None
         sitio      = _coerce_scalar(row.get(col_sitio)) if col_sitio else ""
-        pais_row   = _coerce_scalar(row.get(col_pais))  if col_pais else ""
+        pais_row   = _coerce_scalar(row.get(col_pais))  if col_pais else pais_inferido
         depto_row  = _coerce_scalar(row.get(col_depto)) if col_depto else ""
-        sitio_row  = str(sitio).strip()
-        if not _is_nonempty_site(sitio_row):
-            continue  # ← ignora filas sin Sitio
 
-        mes_rep    = month_label_from_value(fecha_diag)
+        mes_rep    = month_label_from_value(fecha_diag) or month_label_from_value(mes_inferido)
 
-        pais_row   = str(pais_row).strip()
+        pais_row   = str(pais_row).strip() or pais_inferido
         depto_row  = str(depto_row).strip()
-        mes_rep    = str(mes_rep).strip()
+        sitio_row  = str(sitio).strip()
+        mes_rep    = str(mes_rep).strip() or month_label_from_value(mes_inferido)
 
         # === Validación de SEXO permitido (cuenta chequeo si hay algo en celda) ===
         if col_sexo is not None:
@@ -749,7 +713,7 @@ def procesar_hts_tst(
             if pd.notna(id_val) and str(id_val).strip():
                 _add_metric(IND_ID_DUPLICADO, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
 
-        # CD4 vacío cuando Resultado = Positivo
+        # CD4 vacío cuando Resultado = Positivo (agrega Motivo de no CD4 después de Resultado)
         if resultado == "positivo":
             _add_metric(IND_CD4_MISSING, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
             if pd.isna(cd4) or str(cd4).strip() == "":
@@ -802,41 +766,47 @@ def procesar_hts_tst(
                     "Columna Excel": col_diag
                 })
 
-    # Duplicados ID — considerar solo filas con Sitio informado
-    if col_id and col_sitio:
+    # Duplicados ID (una fila POR REGISTRO duplicado con Resultado VIH)
+    if col_id:
         try:
             col_id_idx = list(df_data.columns).index(col_id)
         except ValueError:
             col_id_idx = None
 
-        mask_site = df_data[col_sitio].apply(_is_nonempty_site)
-        ids_raw = df_data.loc[mask_site, col_id].astype(str).str.strip()
+        ids_raw = df_data[col_id].astype(str).str.strip()
         mask_non_empty = ids_raw.replace({"nan": "", "NaN": ""}).astype(bool)
         vc = ids_raw[mask_non_empty].value_counts()
         duplicados = vc[vc > 1]
 
         if not duplicados.empty:
             for id_val, count in duplicados.items():
-                idxs = df_data.index[(df_data[col_id].astype(str).str.strip() == id_val) & (mask_site)].tolist()
-                if not idxs:
-                    continue
+                idxs = df_data.index[ids_raw == id_val].tolist()
                 r_ref = df_data.loc[idxs[0]]
-                ref_pais  = str(_coerce_scalar(r_ref.get(col_pais))).strip()  if col_pais  else ""
-                ref_depto = str(_coerce_scalar(r_ref.get(col_depto))).strip() if col_depto else ""
-                ref_sitio = str(_coerce_scalar(r_ref.get(col_sitio))).strip()  if col_sitio  else ""
-                ref_mes   = month_label_from_value(_coerce_scalar(r_ref.get(col_diag))) or ""
-
-                _add_metric(IND_ID_DUPLICADO, ref_pais, ref_mes, ref_depto, ref_sitio, errors_add=int(count) - 1)
+                ref_pais  = str(_coerce_scalar(r_ref.get(col_pais)))  if col_pais  else pais_inferido
+                ref_depto = str(_coerce_scalar(r_ref.get(col_depto))) if col_depto else ""
+                ref_sitio = str(_coerce_scalar(r_ref.get(col_sitio)))  if col_sitio  else ""
+                ref_mes   = month_label_from_value(_coerce_scalar(r_ref.get(col_diag))) or month_label_from_value(mes_inferido)
+                _add_metric(IND_ID_DUPLICADO,
+                            ref_pais.strip() or pais_inferido,
+                            ref_mes.strip() or month_label_from_value(mes_inferido),
+                            ref_depto.strip(),
+                            ref_sitio.strip(),
+                            errors_add=int(count) - 1)
 
                 for i in idxs:
                     r = df_data.loc[i]
-                    pais_row  = str(_coerce_scalar(r.get(col_pais))).strip()  if col_pais  else ""
-                    depto_row = str(_coerce_scalar(r.get(col_depto))).strip() if col_depto else ""
-                    sitio_row = str(_coerce_scalar(r.get(col_sitio))).strip()  if col_sitio  else ""
-                    mes_rep   = month_label_from_value(_coerce_scalar(r.get(col_diag))) or ""
+                    pais_row  = str(_coerce_scalar(r.get(col_pais)))  if col_pais  else pais_inferido
+                    depto_row = str(_coerce_scalar(r.get(col_depto))) if col_depto else ""
+                    sitio_row  = str(_coerce_scalar(r.get(col_sitio)))  if col_sitio  else ""
+                    mes_rep   = month_label_from_value(_coerce_scalar(r.get(col_diag))) or month_label_from_value(mes_inferido)
+
+                    pais_row  = pais_row.strip() or pais_inferido
+                    depto_row = depto_row.strip()
+                    sitio_row = sitio_row.strip()
+                    mes_rep   = mes_rep.strip() or month_label_from_value(mes_inferido)
 
                     fila_excel = int(idx_hts + 2 + i)
-                    col_letter = get_column_letter(col_id_idx + 1) if col_id_idx is not None else str(col_id)
+                    col_letter = get_column_letter(col_id_idx + 1) if col_id_idx is not None else col_id
                     resultado_vih_val = _coerce_scalar(r.get(col_resultado_vih)) if col_resultado_vih else ""
 
                     errores_iddup.append({
@@ -860,7 +830,6 @@ def procesar_tx_ml_cita(  # TX_ML
     """
     Valida que en la hoja TX_ML la columna 'Fecha de su última cita esperada' NO venga vacía.
     Además agrega 'Modalidad de reporte' en la salida, colocándola justo después de 'ID expediente'.
-    Solo reporta filas cuando 'Sitio' tiene información.
     """
     sheet_name = "TX_ML"
     if sheet_name not in xl.sheet_names:
@@ -877,7 +846,7 @@ def procesar_tx_ml_cita(  # TX_ML
                 return True
         return False
 
-    # Buscar fila de encabezado por la presencia de la columna objetivo
+    # Buscamos la fila de encabezado por la presencia de la columna objetivo
     # Tokens robustos: "fecha" + "ultima" + "cita" + "esper"
     idx_header = None
     for r in range(nrows):
@@ -935,7 +904,7 @@ def procesar_tx_ml_cita(  # TX_ML
     fila_base_txml = idx_header + 2  # coherente con otras tablas
 
     for i, row in df_data.iterrows():
-        # Señal mínima: ID/Sitio/País con algo o el campo objetivo con algo
+        # Señal mínima de "fila real": ID/Sitio/País con algo o el campo objetivo con algo
         row_has_signal = any(
             str(_coerce_scalar(row.get(c))).strip()
             for c in [col_id, col_sitio, col_pais]
@@ -946,14 +915,17 @@ def procesar_tx_ml_cita(  # TX_ML
             continue  # ignora filas completamente vacías
 
         # Contexto
-        p = str(_coerce_scalar(row.get(col_pais))) if col_pais else ""
+        p = str(_coerce_scalar(row.get(col_pais))) if col_pais else pais_inferido
         d = str(_coerce_scalar(row.get(col_depto))) if col_depto else ""
         s = str(_coerce_scalar(row.get(col_sitio))) if col_sitio else ""
-        if not _is_nonempty_site(s):
-            continue  # ← ignora filas sin Sitio
 
         raw_mes = row.get(col_fecha_rep) if col_fecha_rep else (row.get(col_mesrep) if col_mesrep else None)
-        m = month_label_from_value(raw_mes) or ""
+        m = month_label_from_value(raw_mes) or month_label_from_value(mes_inferido)
+
+        p = p.strip() or pais_inferido
+        d = d.strip()
+        s = s.strip()
+        m = m.strip() or month_label_from_value(mes_inferido)
 
         # Chequeo + posible error
         _add_metric(IND_TXML_CITA_VACIA, p, m, d, s, checks_add=1)
@@ -961,10 +933,10 @@ def procesar_tx_ml_cita(  # TX_ML
         if pd.isna(v_exp) or str(v_exp).strip() == "":
             _add_metric(IND_TXML_CITA_VACIA, p, m, d, s, errors_add=1)
             errores_txml_cita.append({
-                "País": p.strip(),
-                "Departamento": d.strip(),
-                "Sitio": s.strip(),
-                "Mes de reporte": m.strip(),
+                "País": p,
+                "Departamento": d,
+                "Sitio": s,
+                "Mes de reporte": m,
                 "Archivo": nombre_archivo,
                 "ID expediente": str(_coerce_scalar(row.get(col_id))).strip() if col_id else "",
                 "Modalidad de reporte": str(_coerce_scalar(row.get(col_modalidad))).strip() if col_modalidad else "",
@@ -1039,6 +1011,7 @@ if procesar:
     # ===== Reordenar columnas: asegurar "Modalidad de reporte" justo tras "ID expediente"
     if not st.session_state.df_txml_cita.empty:
         cols = list(st.session_state.df_txml_cita.columns)
+        # Soporte para dos variantes del encabezado ID
         after_col = "ID expediente" if "ID expediente" in cols else ("ID Expediente" if "ID Expediente" in cols else None)
         if after_col and "Modalidad de reporte" in cols:
             cols.remove("Modalidad de reporte")
@@ -1211,6 +1184,24 @@ with sel:
 # 4) Detalle por indicador
 det = st.container(border=True)
 with det:
+    # --- Estilo: tabs con scroll horizontal (Detalle por indicador)
+    st.markdown("""
+        <style>
+        /* Hace desplazable horizontalmente la barra de pestañas */
+        .stTabs [data-baseweb="tab-list"]{
+        overflow-x: auto !important;
+        overflow-y: hidden;
+        white-space: nowrap;
+        gap: .5rem;
+        padding-bottom: 2px;
+        scrollbar-width: thin;  /* Firefox */
+    }
+        .stTabs [data-baseweb="tab"]{
+        flex: 0 0 auto;         /* evita que las tabs se encojan y permite el scroll */
+    }
+        </style>
+            """, unsafe_allow_html=True)
+
     st.subheader("🔎 *Detalle por indicador*")
 
     tab_specs = [
@@ -1307,7 +1298,7 @@ full_dict = {
     "TX_CURR ≠ Dispensación_TARV": st.session_state.df_currq,
     "ID (expediente) duplicado": st.session_state.df_iddup,
     "Sexo inválido (HTS_TST)": st.session_state.df_sexo,
-    "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,
+    "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,  # TX_ML
 }
 
 rows_metrics_global = [
@@ -1342,11 +1333,12 @@ filt_dict = {
     "TX_CURR ≠ Dispensación_TARV": df_currq_f,
     "ID (expediente) duplicado": df_iddup_f,
     "Sexo inválido (HTS_TST)": df_sexo_f,
-    "TX_ML: Última cita esperada vacía": df_txml_cita_f,
+    "TX_ML: Última cita esperada vacía": df_txml_cita_f,  # TX_ML
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
 fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+# Fix menor para evitar NameError si 'pais' no existe en este contexto:
 pais = st.session_state.get("sel_pais", default_pais)  # (no afecta validaciones)
 
 dl = st.container(border=True)
@@ -1364,7 +1356,7 @@ with dl:
         st.download_button(
             "⬇️ Descargar Excel (FILTRADO)",
             data=bytes_excel_filt,
-            file_name=f"Errores_validaciones_{pais}_{fecha_str}.xlsx",
+            file_name=f"Errores_validaciones_ {pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
