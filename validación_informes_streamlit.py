@@ -211,6 +211,32 @@ def _normalize_sexo(x) -> str:
     if sx.startswith("fem"):  return "Femenino"
     return str(x).strip()
 
+def _is_nonempty_site(x) -> bool:
+    """
+    Devuelve True si 'Nombre del sitio' tiene información útil.
+    Considera vacíos valores como '', 'NA', 'N/A', 'Desconocido', '-', '—', '.', etc.
+    """
+    if x is None:
+        return False
+    s = str(x).strip()
+    if not s:
+        return False
+    # normalizado para comparar placeholders
+    sn = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").strip().lower()
+    invalid_tokens = {
+        "na", "n/a", "desconocido", "sin sitio", "sin nombre", "no aplica", "no aplica.", "no-aplica",
+        "nan", "none", "null", "s/n", "s/d", "s.i.", "sd"
+    }
+    if sn in invalid_tokens:
+        return False
+    # solo símbolos / separadores
+    if re.fullmatch(r"[-_\.—–]+", s):
+        return False
+    return True
+
+
+
+
 def buscar_columna_multi(columnas, *patrones) -> Optional[str]:
     cols_norm = [_norm(c) for c in columnas]
     for i, cn in enumerate(cols_norm):
@@ -823,19 +849,20 @@ def procesar_hts_tst(
                     })
 
 # ===== VALIDACIÓN TX_ML: Fecha de su última cita esperada + Modalidad =====
-def procesar_tx_ml_cita(  # TX_ML
+def procesar_tx_ml_cita(
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
     errores_txml_cita
 ):
     """
-    Valida que en la hoja TX_ML la columna 'Fecha de su última cita esperada' NO venga vacía.
-    Además agrega 'Modalidad de reporte' en la salida, colocándola justo después de 'ID expediente'.
+    TX_ML → Valida que 'Fecha de su última cita esperada' NO venga vacía.
+    • Aplica FILTRO por 'Nombre del sitio' SOLO si la columna existe.
+    • En la salida incluye 'Modalidad de reporte' justo después de 'ID expediente'.
     """
     sheet_name = "TX_ML"
     if sheet_name not in xl.sheet_names:
         return
 
-    # Leemos en crudo y buscamos encabezado por tokens normalizados
+    # Leer hoja en crudo y ubicar encabezado por tokens robustos
     df_raw = xl.parse(sheet_name, header=None)
     nrows, ncols = df_raw.shape
 
@@ -846,46 +873,38 @@ def procesar_tx_ml_cita(  # TX_ML
                 return True
         return False
 
-    # Buscamos la fila de encabezado por la presencia de la columna objetivo
-    # Tokens robustos: "fecha" + "ultima" + "cita" + "esper"
     idx_header = None
+    # Preferente: fecha + última + cita + esper(ada)
     for r in range(nrows):
-        row_vals = df_raw.iloc[r].tolist()
-        if _row_has_tokens_norm(row_vals, ["fecha", "ultima", "cita", "esper"]):
+        if _row_has_tokens_norm(df_raw.iloc[r].tolist(), ["fecha", "ultima", "cita", "esper"]):
             idx_header = r
             break
-
-    # Fallback (tolerante): intenta por "fecha" + "cita"
+    # Fallback amplio: fecha + cita
     if idx_header is None:
         for r in range(nrows):
-            row_vals = df_raw.iloc[r].tolist()
-            if _row_has_tokens_norm(row_vals, ["fecha", "cita"]):
+            if _row_has_tokens_norm(df_raw.iloc[r].tolist(), ["fecha", "cita"]):
                 idx_header = r
                 break
-
     if idx_header is None:
-        return  # No se detectó la cabecera de la tabla TX_ML
+        return  # no se detectó cabecera
 
-    # Normalizamos tabla
-    df_data, columnas = normalizar_tabla_por_encabezado(df_raw, idx_header)
+    # Normalizar tabla a partir del encabezado encontrado
+    df_data, _ = normalizar_tabla_por_encabezado(df_raw, idx_header)
     df_data = _rename_standard_columns(df_data)
 
-    # Localizamos la columna objetivo (muy tolerante a variantes)
+    # Columnas objetivo y de contexto (tolerantes a variantes)
     col_cita_esperada = (
-        buscar_columna_multi(df_data.columns, "fecha", "ultima", "cita", "esper")
-        or buscar_columna_multi(df_data.columns, "fecha", "cita", "esper")
-        or buscar_columna_multi(df_data.columns, "fecha", "cita")
+        buscar_columna_multi(df_data.columns, "fecha", "ultima", "cita", "esper") or
+        buscar_columna_multi(df_data.columns, "fecha", "cita", "esper") or
+        buscar_columna_multi(df_data.columns, "fecha", "cita")
     )
     if not col_cita_esperada:
-        return  # No existe la columna en esta plantilla
+        return
 
-    # Modalidad de reporte (si existe en plantilla)
     col_modalidad = (
-        buscar_columna_multi(df_data.columns, "modalidad", "reporte")
-        or buscar_columna_multi(df_data.columns, "modalidad")
+        buscar_columna_multi(df_data.columns, "modalidad", "reporte") or
+        buscar_columna_multi(df_data.columns, "modalidad")
     )
-
-    # Contexto (País/Depto/Sitio/Mes)
     col_pais      = buscar_columna_multi(df_data.columns, "pais")
     col_depto     = (buscar_columna_multi(df_data.columns, "departamento") or
                      buscar_columna_multi(df_data.columns, "depto") or
@@ -904,20 +923,22 @@ def procesar_tx_ml_cita(  # TX_ML
     fila_base_txml = idx_header + 2  # coherente con otras tablas
 
     for i, row in df_data.iterrows():
-        # Señal mínima de "fila real": ID/Sitio/País con algo o el campo objetivo con algo
+        # Señal mínima de fila (algo en ID/Sitio/País o en la propia columna objetivo)
         row_has_signal = any(
             str(_coerce_scalar(row.get(c))).strip()
-            for c in [col_id, col_sitio, col_pais]
-            if c is not None
+            for c in [col_id, col_sitio, col_pais] if c is not None
         ) or not (pd.isna(row.get(col_cita_esperada)) or str(row.get(col_cita_esperada)).strip() == "")
-
         if not row_has_signal:
-            continue  # ignora filas completamente vacías
+            continue
 
         # Contexto
         p = str(_coerce_scalar(row.get(col_pais))) if col_pais else pais_inferido
         d = str(_coerce_scalar(row.get(col_depto))) if col_depto else ""
         s = str(_coerce_scalar(row.get(col_sitio))) if col_sitio else ""
+
+        # FILTRO por sitio: solo si la columna de sitio existe
+        if col_sitio and not _is_nonempty_site(s):
+            continue
 
         raw_mes = row.get(col_fecha_rep) if col_fecha_rep else (row.get(col_mesrep) if col_mesrep else None)
         m = month_label_from_value(raw_mes) or month_label_from_value(mes_inferido)
