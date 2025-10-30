@@ -1184,6 +1184,24 @@ with sel:
 # 4) Detalle por indicador
 det = st.container(border=True)
 with det:
+    # --- Estilo: tabs con scroll horizontal (Detalle por indicador)
+    st.markdown("""
+        <style>
+        /* Hace desplazable horizontalmente la barra de pestañas */
+        .stTabs [data-baseweb="tab-list"]{
+        overflow-x: auto !important;
+        overflow-y: hidden;
+        white-space: nowrap;
+        gap: .5rem;
+        padding-bottom: 2px;
+        scrollbar-width: thin;  /* Firefox */
+    }
+        .stTabs [data-baseweb="tab"]{
+        flex: 0 0 auto;         /* evita que las tabs se encojan y permite el scroll */
+    }
+        </style>
+            """, unsafe_allow_html=True)
+
     st.subheader("🔎 *Detalle por indicador*")
 
     tab_specs = [
