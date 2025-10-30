@@ -1169,26 +1169,23 @@ with sel:
 det = st.container(border=True)
 with det:
     st.subheader("🔎 *Detalle por indicador*")
-    tabs = st.tabs([
-        "TX_PVLS (Num) > TX_PVLS (Den)",
-        "TX_PVLS (Den) > TX_CURR",
-        "CD4 vacío positivo",
-        "Fecha de inicio TARV < Fecha de diagnóstico",
-        "Formato fecha diagnóstico",
-        "TX_CURR ≠ Dispensación_TARV",
-        "ID (expediente) duplicado",
-        "Sexo inválido (HTS_TST)",
-        "TX_ML: Última cita esperada vacía",  # <-- nuevo TX_ML
-    ])
-    with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=340)
-    with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=340)
-    with tabs[2]: show_df_or_note(df_cd4_f,   "— Sin positivos con CD4 vacío —", height=340)
-    with tabs[3]: show_df_or_note(df_tarv_f,  "— Sin casos TARV < Diagnóstico —", height=340)
-    with tabs[4]: show_df_or_note(df_fdiag_f, "— Sin problemas de formato de fecha —", height=340)
-    with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=340)
-    with tabs[6]: show_df_or_note(df_iddup_f, "— Sin IDs (expediente) duplicados —", height=340)
-    with tabs[7]: show_df_or_note(df_sexo_f,  "— Sin filas con sexo inválido —", height=340)
-    with tabs[8]: show_df_or_note(df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —", height=340)  # <-- nuevo TX_ML
+
+    tab_specs = [
+        ("TX_PVLS (Num) > TX_PVLS (Den)", df_num_f,   "— Sin diferencias de Numerador > Denominador —"),
+        ("TX_PVLS (Den) > TX_CURR",       df_txpv_f,  "— Sin casos Denominador > TX_CURR —"),
+        ("CD4 vacío positivo",            df_cd4_f,   "— Sin positivos con CD4 vacío —"),
+        ("Fecha de inicio TARV < Fecha de diagnóstico", df_tarv_f, "— Sin casos TARV < Diagnóstico —"),
+        ("Formato fecha diagnóstico",     df_fdiag_f, "— Sin problemas de formato de fecha —"),
+        ("TX_CURR ≠ Dispensación_TARV",   df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —"),
+        ("ID (expediente) duplicado",     df_iddup_f, "— Sin IDs (expediente) duplicados —"),
+        ("Sexo inválido (HTS_TST)",       df_sexo_f,  "— Sin filas con sexo inválido —"),
+        ("TX_ML: Última cita esperada vacía", df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —"),  # <-- NUEVA
+    ]
+
+    tabs = st.tabs([title for title, _, _ in tab_specs])
+    for t, (_, df_, empty_note) in zip(tabs, tab_specs):
+        with t:
+            show_df_or_note(df_, empty_note, height=340)
 
 # 5) Métricas de calidad (adaptadas al filtro)
 met = st.container(border=True)
