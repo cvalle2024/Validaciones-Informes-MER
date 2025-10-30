@@ -136,7 +136,8 @@ for key, val in {
     "df_fdiag": pd.DataFrame(),    # Formato fecha diagnóstico
     "df_currq": pd.DataFrame(),    # TX_CURR ≠ Dispensación_TARV
     "df_iddup": pd.DataFrame(),    # ID (expediente) duplicado
-    "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)  <-- nuevo
+    "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)
+    "df_txml_cita": pd.DataFrame(),  # <-- nuevo TX_ML
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
 }.items():
@@ -156,7 +157,10 @@ IND_TARV_LT_DIAG    = "tarv_lt_diag"
 IND_DIAG_BAD_FMT    = "diag_bad_format"
 IND_CURR_Q1Q2_DIFF  = "curr_q1q2_diff"    # TX_CURR ≠ Dispensación_TARV
 IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
-IND_SEXO_INVALID    = "sexo_invalid"      # <-- nuevo
+IND_SEXO_INVALID    = "sexo_invalid"      # Sexo inválido (HTS_TST)
+
+# --- NUEVO indicador TX_ML
+IND_TXML_CITA_VACIA = "txml_cita_vacia"  # <-- nuevo TX_ML
 
 DISPLAY_NAMES = {
     IND_NUM_GT_DEN:      "TX_PVLS (Num) > TX_PVLS (Den)",
@@ -166,8 +170,13 @@ DISPLAY_NAMES = {
     IND_DIAG_BAD_FMT:    "Formato fecha diagnóstico",
     IND_CURR_Q1Q2_DIFF:  "TX_CURR ≠ Dispensación_TARV",
     IND_ID_DUPLICADO:    "ID (expediente) duplicado",
-    IND_SEXO_INVALID:    "Sexo inválido (HTS_TST)",   # <-- nuevo
+    IND_SEXO_INVALID:    "Sexo inválido (HTS_TST)",
 }
+
+# Mostrar nombre legible del nuevo indicador
+DISPLAY_NAMES.update({
+    IND_TXML_CITA_VACIA: "TX_ML: Última cita esperada vacía",  # <-- nuevo TX_ML
+})
 
 MESES = {
     "enero","febrero","marzo","abril","mayo","junio",
@@ -599,7 +608,7 @@ def procesar_tx_curr_cuadros(
 def procesar_hts_tst(
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
     errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup,
-    errores_sexo   # <-- nuevo
+    errores_sexo
 ):
     if "HTS_TST" not in xl.sheet_names:
         return
@@ -630,8 +639,8 @@ def procesar_hts_tst(
                      _first_col(df_data, "numero", "expediente") or
                      _first_col(df_data, "número", "expediente") or
                      _first_col(df_data, "id"))
-    col_sexo      = _first_col(df_data, "sexo") or _first_col(df_data, "genero") or _first_col(df_data, "género")  # <-- nuevo
-    col_motivo    = _first_col(df_data, "motivo", "cd4")  # <-- nuevo (Motivo de no CD4)
+    col_sexo      = _first_col(df_data, "sexo") or _first_col(df_data, "genero") or _first_col(df_data, "género")
+    col_motivo    = _first_col(df_data, "motivo", "cd4")
 
     if not all([col_resultado, col_cd4, col_diag]):
         return
@@ -790,7 +799,7 @@ def procesar_hts_tst(
                     r = df_data.loc[i]
                     pais_row  = str(_coerce_scalar(r.get(col_pais)))  if col_pais  else pais_inferido
                     depto_row = str(_coerce_scalar(r.get(col_depto))) if col_depto else ""
-                    sitio_row = str(_coerce_scalar(r.get(col_sitio)))  if col_sitio  else ""
+                    sitio_row  = str(_coerce_scalar(r.get(col_sitio)))  if col_sitio  else ""
                     mes_rep   = month_label_from_value(_coerce_scalar(r.get(col_diag))) or month_label_from_value(mes_inferido)
 
                     pais_row  = pais_row.strip() or pais_inferido
@@ -814,6 +823,122 @@ def procesar_hts_tst(
                         "Columna Excel": col_letter,
                         "Ocurrencias ID": int(count),
                     })
+
+# ===== NUEVA VALIDACIÓN: TX_ML → Fecha de su última cita esperada =====
+def procesar_tx_ml_cita(  # <-- nuevo TX_ML
+    xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
+    errores_txml_cita
+):
+    """
+    Valida que en la hoja TX_ML (tabla TX_ML) la columna
+    'Fecha de su última cita esperada' NO venga vacía.
+    Si viene vacía, agrega fila al detalle de errores.
+    """
+    sheet_name = "TX_ML"
+    if sheet_name not in xl.sheet_names:
+        return
+
+    # Leemos en crudo y buscamos encabezado por tokens normalizados
+    df_raw = xl.parse(sheet_name, header=None)
+    nrows, ncols = df_raw.shape
+
+    def _row_has_tokens_norm(row_vals, tokens):
+        for cell in row_vals:
+            s = _norm(cell)
+            if all(tok in s for tok in tokens):
+                return True
+        return False
+
+    # Buscamos la fila de encabezado por la presencia de la columna objetivo
+    # Tokens robustos: "fecha" + "ultima" + "cita" + "esper"
+    idx_header = None
+    for r in range(nrows):
+        row_vals = df_raw.iloc[r].tolist()
+        if _row_has_tokens_norm(row_vals, ["fecha", "ultima", "cita", "esper"]):
+            idx_header = r
+            break
+
+    # Fallback (muy tolerante): intenta por "fecha" + "cita"
+    if idx_header is None:
+        for r in range(nrows):
+            row_vals = df_raw.iloc[r].tolist()
+            if _row_has_tokens_norm(row_vals, ["fecha", "cita"]):
+                idx_header = r
+                break
+
+    if idx_header is None:
+        return  # No se detectó la cabecera de la tabla TX_ML
+
+    # Normalizamos tabla
+    df_data, columnas = normalizar_tabla_por_encabezado(df_raw, idx_header)
+    df_data = _rename_standard_columns(df_data)
+
+    # Localizamos la columna objetivo (muy tolerante a variantes)
+    col_cita = (
+        buscar_columna_multi(df_data.columns, "fecha", "ultima", "cita", "esper")
+        or buscar_columna_multi(df_data.columns, "fecha", "cita")  # fallback
+    )
+    if not col_cita:
+        return  # No existe la columna en esta plantilla
+
+    # Contexto (País/Depto/Sitio/Mes)
+    col_pais      = buscar_columna_multi(df_data.columns, "pais")
+    col_depto     = (buscar_columna_multi(df_data.columns, "departamento") or
+                     buscar_columna_multi(df_data.columns, "depto") or
+                     buscar_columna_multi(df_data.columns, "provincia"))
+    col_sitio     = (buscar_columna_multi(df_data.columns, "servicio", "salud") or
+                     buscar_columna_multi(df_data.columns, "sitio") or
+                     buscar_columna_multi(df_data.columns, "clinica"))
+    col_fecha_rep = buscar_columna_multi(df_data.columns, "fecha", "reporte")
+    col_mesrep    = buscar_columna_multi(df_data.columns, "mes", "reporte")
+    col_id        = (buscar_columna_multi(df_data.columns, "id", "expediente") or
+                     buscar_columna_multi(df_data.columns, "numero", "expediente") or
+                     buscar_columna_multi(df_data.columns, "número", "expediente") or
+                     buscar_columna_multi(df_data.columns, "id"))
+
+    col_cita_idx = df_data.columns.tolist().index(col_cita)
+    fila_base_txml = idx_header + 2  # coherente con otras tablas
+
+    for i, row in df_data.iterrows():
+        # Señal mínima de "fila real": ID/Sitio/País con algo o el campo objetivo con algo
+        row_has_signal = any(
+            str(_coerce_scalar(row.get(c))).strip()
+            for c in [col_id, col_sitio, col_pais]
+            if c is not None
+        ) or not (pd.isna(row.get(col_cita)) or str(row.get(col_cita)).strip() == "")
+
+        if not row_has_signal:
+            continue  # ignora filas completamente vacías
+
+        # Contexto
+        p = str(_coerce_scalar(row.get(col_pais))) if col_pais else pais_inferido
+        d = str(_coerce_scalar(row.get(col_depto))) if col_depto else ""
+        s = str(_coerce_scalar(row.get(col_sitio))) if col_sitio else ""
+
+        raw_mes = row.get(col_fecha_rep) if col_fecha_rep else (row.get(col_mesrep) if col_mesrep else None)
+        m = month_label_from_value(raw_mes) or month_label_from_value(mes_inferido)
+
+        p = p.strip() or pais_inferido
+        d = d.strip()
+        s = s.strip()
+        m = m.strip() or month_label_from_value(mes_inferido)
+
+        # Chequeo + posible error
+        _add_metric(IND_TXML_CITA_VACIA, p, m, d, s, checks_add=1)
+        v = _coerce_scalar(row.get(col_cita))
+        if pd.isna(v) or str(v).strip() == "":
+            _add_metric(IND_TXML_CITA_VACIA, p, m, d, s, errors_add=1)
+            errores_txml_cita.append({
+                "País": p,
+                "Departamento": d,
+                "Sitio": s,
+                "Mes de reporte": m,
+                "Archivo": nombre_archivo,
+                "ID expediente": str(_coerce_scalar(row.get(col_id))).strip() if col_id else "",
+                "Fecha de su última cita esperada": "",
+                "Fila Excel": int(fila_base_txml + i),
+                "Columna Excel": get_column_letter(col_cita_idx + 1)
+            })
 
 # ============================
 # --------- PROCESO ----------
@@ -847,7 +972,8 @@ if procesar:
     errores_formato_fecha_diag = []
     errores_currq = []
     errores_iddup = []
-    errores_sexo = []  # <-- nuevo
+    errores_sexo = []
+    errores_txml_cita = []  # <-- nuevo TX_ML
 
     st.session_state.metrics_global = defaultdict(lambda: {"errors": 0, "checks": 0})
     st.session_state.metrics_by_pds = defaultdict(lambda: {"errors": 0, "checks": 0})
@@ -860,7 +986,8 @@ if procesar:
             procesar_tx_pvls_y_curr(xl, pais_inf, mes_inf, nombre_archivo, errores_numerador, errores_txpvls)
             procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo,
                              errores_cd4, errores_fecha_tarv, errores_formato_fecha_diag, errores_iddup,
-                             errores_sexo)  # <-- nuevo
+                             errores_sexo)
+            procesar_tx_ml_cita(xl, pais_inf, mes_inf, nombre_archivo, errores_txml_cita)  # <-- nuevo TX_ML
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
         except Exception as e:
             st.warning(f"⚠️ Error procesando {nombre_archivo}: {e}")
@@ -873,7 +1000,8 @@ if procesar:
     st.session_state.df_fdiag = pd.DataFrame(errores_formato_fecha_diag)
     st.session_state.df_currq = pd.DataFrame(errores_currq)
     st.session_state.df_iddup = pd.DataFrame(errores_iddup)
-    st.session_state.df_sexo  = pd.DataFrame(errores_sexo)  # <-- nuevo
+    st.session_state.df_sexo  = pd.DataFrame(errores_sexo)
+    st.session_state.df_txml_cita = pd.DataFrame(errores_txml_cita)  # <-- nuevo TX_ML
     st.session_state.processed = True
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
 
@@ -885,7 +1013,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup","df_sexo"]:
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]:  # <-- nuevo TX_ML
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -900,12 +1028,13 @@ df_all = pd.concat(
     [df for df in [
         st.session_state.df_num, st.session_state.df_txpv, st.session_state.df_cd4,
         st.session_state.df_tarv, st.session_state.df_fdiag, st.session_state.df_currq,
-        st.session_state.df_iddup, st.session_state.df_sexo  # <-- nuevo
+        st.session_state.df_iddup, st.session_state.df_sexo,
+        st.session_state.df_txml_cita  # <-- nuevo TX_ML
     ] if isinstance(df, pd.DataFrame) and not df.empty],
     ignore_index=True
 ) if any([
     isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
-    for k in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup","df_sexo"]
+    for k in ["df_num","df_txpv","df_cd4","df_tarv","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]  # <-- nuevo TX_ML
 ]) else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
 for c in ["País","Departamento","Sitio","Mes de reporte"]:
@@ -967,7 +1096,8 @@ df_tarv_f  = _aplicar_filtro(st.session_state.df_tarv)
 df_fdiag_f = _aplicar_filtro(st.session_state.df_fdiag)
 df_currq_f = _aplicar_filtro(st.session_state.df_currq)
 df_iddup_f = _aplicar_filtro(st.session_state.df_iddup)
-df_sexo_f  = _aplicar_filtro(st.session_state.df_sexo)  # <-- nuevo
+df_sexo_f  = _aplicar_filtro(st.session_state.df_sexo)
+df_txml_cita_f = _aplicar_filtro(st.session_state.df_txml_cita)  # <-- nuevo TX_ML
 
 # Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
@@ -1010,7 +1140,7 @@ df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selecti
 res = st.container(border=True)
 with res:
     st.subheader("⚫ *Resumen de errores por indicador*")
-    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+    c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(9)  # <-- nuevo TX_ML
     c1.metric("*TX_PVLS (Num) > TX_PVLS (Den)*", len(df_num_f))
     c2.metric("*TX_PVLS (Den) > TX_CURR*", len(df_txpv_f))
     c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
@@ -1018,14 +1148,16 @@ with res:
     c5.metric("*Fecha diag. mal formateada*", len(df_fdiag_f))
     c6.metric("*TX_CURR ≠ Dispensación_TARV*", len(df_currq_f))
     c7.metric("*ID duplicado - filas detectadas*", len(df_iddup_f))
-    c8.metric("*Sexo inválido (HTS_TST)*", len(df_sexo_f))  # <-- nuevo
+    c8.metric("*Sexo inválido (HTS_TST)*", len(df_sexo_f))
+    c9.metric("*TX_ML: Última cita esperada vacía*", len(df_txml_cita_f))  # <-- nuevo TX_ML
 
 # 3) Indicadores – % de error (selección)
 sel = st.container(border=True)
 with sel:
     st.subheader("📊 *Porcentaje de errores por indicador*")
     cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING, IND_TARV_LT_DIAG,
-             IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO, IND_SEXO_INVALID]  # <-- nuevo
+             IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO, IND_SEXO_INVALID,
+             IND_TXML_CITA_VACIA]  # <-- nuevo TX_ML
     cols = st.columns(len(cards))
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
     for col, key in zip(cols, cards):
@@ -1045,7 +1177,8 @@ with det:
         "Formato fecha diagnóstico",
         "TX_CURR ≠ Dispensación_TARV",
         "ID (expediente) duplicado",
-        "Sexo inválido (HTS_TST)",  # <-- nuevo
+        "Sexo inválido (HTS_TST)",
+        "TX_ML: Última cita esperada vacía",  # <-- nuevo TX_ML
     ])
     with tabs[0]: show_df_or_note(df_num_f,   "— Sin diferencias de Numerador > Denominador —", height=340)
     with tabs[1]: show_df_or_note(df_txpv_f,  "— Sin casos Denominador > TX_CURR —", height=340)
@@ -1055,6 +1188,7 @@ with det:
     with tabs[5]: show_df_or_note(df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —", height=340)
     with tabs[6]: show_df_or_note(df_iddup_f, "— Sin IDs (expediente) duplicados —", height=340)
     with tabs[7]: show_df_or_note(df_sexo_f,  "— Sin filas con sexo inválido —", height=340)
+    with tabs[8]: show_df_or_note(df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —", height=340)  # <-- nuevo TX_ML
 
 # 5) Métricas de calidad (adaptadas al filtro)
 met = st.container(border=True)
@@ -1076,12 +1210,13 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
     config_resaltado = {
         "Numerador > Denominador": "Numerador",
         "Denominador > TX_CURR": "Denominador (PVLS)",
-        "CD4 vacío positivo": ["CD4 Basal", "Motivo de no CD4"],  # <-- ahora lista
+        "CD4 vacío positivo": ["CD4 Basal", "Motivo de no CD4"],
         "Fecha TARV < Diagnóstico": "Fecha inicio TARV",
         "Formato fecha diagnóstico": "Fecha del diagnóstico de la prueba",
         "TX_CURR ≠ Dispensación_TARV": "Diferencia (TX_CURR - Disp_TARV)",
         "ID (expediente) duplicado": "ID expediente",
-        "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",  # <-- nuevo
+        "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",
+        "TX_ML: Última cita esperada vacía": "Fecha de su última cita esperada",  # <-- nuevo TX_ML
     }
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -1131,7 +1266,8 @@ full_dict = {
     "Formato fecha diagnóstico": st.session_state.df_fdiag,
     "TX_CURR ≠ Dispensación_TARV": st.session_state.df_currq,
     "ID (expediente) duplicado": st.session_state.df_iddup,
-    "Sexo inválido (HTS_TST)": st.session_state.df_sexo,  # <-- nuevo
+    "Sexo inválido (HTS_TST)": st.session_state.df_sexo,
+    "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,  # <-- nuevo TX_ML
 }
 
 rows_metrics_global = [
@@ -1165,11 +1301,15 @@ filt_dict = {
     "Formato fecha diagnóstico": df_fdiag_f,
     "TX_CURR ≠ Dispensación_TARV": df_currq_f,
     "ID (expediente) duplicado": df_iddup_f,
-    "Sexo inválido (HTS_TST)": df_sexo_f,  # <-- nuevo
+    "Sexo inválido (HTS_TST)": df_sexo_f,
+    "TX_ML: Última cita esperada vacía": df_txml_cita_f,  # <-- nuevo TX_ML
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
 fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
+# Fix menor para evitar NameError si 'pais' no existe en este contexto:
+pais = st.session_state.get("sel_pais", default_pais)  # (no afecta validaciones)
+
 dl = st.container(border=True)
 with dl:
     cdl1, cdl2 = st.columns(2)
@@ -1189,7 +1329,3 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
-
-
-
-
