@@ -855,6 +855,9 @@ def procesar_hts_tst(
                         "ID expediente": str(id_val),
                         "Sexo": sexo_out,
                         "Edad": edad_out,
+                        "Fecha del diagnóstico": (
+                            (pd.to_datetime(_coerce_scalar(r.get(col_diag)), dayfirst=True, errors="coerce").date() if pd.notna(pd.to_datetime(_coerce_scalar(r.get(col_diag)), dayfirst=True, errors="coerce")) else str(_coerce_scalar(r.get(col_diag))).strip()) if col_diag else ""
+                        ),
                         "Resultado prueba VIH": str(resultado_vih_val),
                         "Fila Excel": fila_excel,
                         "Columna Excel": col_letter,
@@ -1050,24 +1053,27 @@ if procesar:
             cols.insert(cols.index(after_col) + 1, "Modalidad de reporte")
             st.session_state.df_txml_cita = st.session_state.df_txml_cita[cols]
 
-    # ===== NUEVO: Reordenar columnas en "ID (expediente) duplicado" para poner Sexo y Edad a la par de ID
+    # ===== NUEVO: Reordenar columnas en "ID (expediente) duplicado" para poner Sexo, Edad y Fecha del diagnóstico a la par de ID
     if not st.session_state.df_iddup.empty:
         cols = list(st.session_state.df_iddup.columns)
         after_col = "ID expediente" if "ID expediente" in cols else ("ID Expediente" if "ID Expediente" in cols else None)
         if after_col:
             # Quitar si ya están en otra posición
-            for extra in ["Sexo", "Edad"]:
+            for extra in ["Sexo", "Edad", "Fecha del diagnóstico"]:
                 if extra in cols:
                     cols.remove(extra)
             insert_pos = cols.index(after_col) + 1
             if "Sexo" in st.session_state.df_iddup.columns:
                 cols.insert(insert_pos, "Sexo"); insert_pos += 1
             if "Edad" in st.session_state.df_iddup.columns:
-                cols.insert(insert_pos, "Edad")
+                cols.insert(insert_pos, "Edad"); insert_pos += 1
+            if "Fecha del diagnóstico" in st.session_state.df_iddup.columns:
+                cols.insert(insert_pos, "Fecha del diagnóstico")
             st.session_state.df_iddup = st.session_state.df_iddup[cols]
 
     st.session_state.processed = True
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
+("Procesamiento completado. Ahora puedes filtrar al instante ✅")
 
 # ============================
 # ------- INTERFAZ (LIVE) ----
