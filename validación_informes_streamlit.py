@@ -178,7 +178,7 @@ DISPLAY_NAMES.update({
 
 MESES = {
     "enero","febrero","marzo","abril","mayo","junio",
-    "julio","agosto","septiembre","setiembre","octubre","noviembre","diciembre",
+    "julio","agosto","septiembre","octubre","noviembre","diciembre",
     "ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic",
     "january","february","march","april","may","june",
     "july","august","september","october","november","december",
@@ -664,6 +664,7 @@ def procesar_hts_tst(
                      _first_col(df_data, "número", "expediente") or
                      _first_col(df_data, "id"))
     col_sexo      = _first_col(df_data, "sexo") or _first_col(df_data, "genero") or _first_col(df_data, "género")
+    col_edad      = _first_col(df_data, "edad")
     col_motivo    = _first_col(df_data, "motivo", "cd4")
 
     if not all([col_resultado, col_cd4, col_diag]):
@@ -835,6 +836,16 @@ def procesar_hts_tst(
                     col_letter = get_column_letter(col_id_idx + 1) if col_id_idx is not None else col_id
                     resultado_vih_val = _coerce_scalar(r.get(col_resultado_vih)) if col_resultado_vih else ""
 
+                    # === NUEVO: capturar Sexo y Edad para la tabla de salida de duplicados ===
+                    sexo_raw = _coerce_scalar(r.get(col_sexo)) if col_sexo else ""
+                    sexo_out = _normalize_sexo(sexo_raw) if str(sexo_raw).strip() else ""
+                    edad_raw = _coerce_scalar(r.get(col_edad)) if col_edad else ""
+                    edad_num = pd.to_numeric(edad_raw, errors="coerce")
+                    if pd.notna(edad_num):
+                        edad_out = int(edad_num) if float(edad_num).is_integer() else float(edad_num)
+                    else:
+                        edad_out = str(edad_raw).strip()
+
                     errores_iddup.append({
                         "País": pais_row,
                         "Departamento": depto_row,
@@ -842,6 +853,8 @@ def procesar_hts_tst(
                         "Mes de reporte": mes_rep,
                         "Archivo": nombre_archivo,
                         "ID expediente": str(id_val),
+                        "Sexo": sexo_out,
+                        "Edad": edad_out,
                         "Resultado prueba VIH": str(resultado_vih_val),
                         "Fila Excel": fila_excel,
                         "Columna Excel": col_letter,
@@ -907,8 +920,7 @@ def procesar_tx_ml_cita(
     )
     col_pais      = buscar_columna_multi(df_data.columns, "pais")
     col_depto     = (buscar_columna_multi(df_data.columns, "departamento") or
-                     buscar_columna_multi(df_data.columns, "depto") or
-                     buscar_columna_multi(df_data.columns, "provincia"))
+                     buscar_columna_multi(df_data.columns, "depto") or buscar_columna_multi(df_data.columns, "provincia"))
     col_sitio     = (buscar_columna_multi(df_data.columns, "servicio", "salud") or
                      buscar_columna_multi(df_data.columns, "sitio") or
                      buscar_columna_multi(df_data.columns, "clinica"))
@@ -1029,15 +1041,30 @@ if procesar:
     st.session_state.df_sexo  = pd.DataFrame(errores_sexo)
     st.session_state.df_txml_cita = pd.DataFrame(errores_txml_cita)  # TX_ML
 
-    # ===== Reordenar columnas: asegurar "Modalidad de reporte" justo tras "ID expediente"
+    # ===== Reordenar columnas: asegurar "Modalidad de reporte" justo tras "ID expediente" en TX_ML
     if not st.session_state.df_txml_cita.empty:
         cols = list(st.session_state.df_txml_cita.columns)
-        # Soporte para dos variantes del encabezado ID
         after_col = "ID expediente" if "ID expediente" in cols else ("ID Expediente" if "ID Expediente" in cols else None)
         if after_col and "Modalidad de reporte" in cols:
             cols.remove("Modalidad de reporte")
             cols.insert(cols.index(after_col) + 1, "Modalidad de reporte")
             st.session_state.df_txml_cita = st.session_state.df_txml_cita[cols]
+
+    # ===== NUEVO: Reordenar columnas en "ID (expediente) duplicado" para poner Sexo y Edad a la par de ID
+    if not st.session_state.df_iddup.empty:
+        cols = list(st.session_state.df_iddup.columns)
+        after_col = "ID expediente" if "ID expediente" in cols else ("ID Expediente" if "ID Expediente" in cols else None)
+        if after_col:
+            # Quitar si ya están en otra posición
+            for extra in ["Sexo", "Edad"]:
+                if extra in cols:
+                    cols.remove(extra)
+            insert_pos = cols.index(after_col) + 1
+            if "Sexo" in st.session_state.df_iddup.columns:
+                cols.insert(insert_pos, "Sexo"); insert_pos += 1
+            if "Edad" in st.session_state.df_iddup.columns:
+                cols.insert(insert_pos, "Edad")
+            st.session_state.df_iddup = st.session_state.df_iddup[cols]
 
     st.session_state.processed = True
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
@@ -1323,7 +1350,7 @@ full_dict = {
 }
 
 rows_metrics_global = [
-    {"Indicador": DISPLAY_NAMES[k], "Errores": v["errors"], "Chequeos": v["checks"], "% Error": _pct(v["errors"], v["checks"])}
+    {"Indicador": DISPLAY_NAMES[k], "Errores": v["errors"], "Chequeos": v["checks"], "% Error": _pct(v["errors"], v["checks"]) }
     for k, v in st.session_state.metrics_global.items()
 ]
 df_metricas_global_all = (
@@ -1338,6 +1365,7 @@ for (pais, depto, sitio, mes_rep, ind), v in st.session_state.metrics_by_pds.ite
         "Indicador": DISPLAY_NAMES[ind], "Errores": v["errors"], "Chequeos": v["checks"],
         "% Error": _pct(v["errors"], v["checks"])
     })
+
 df_metricas_por_mes_all = pd.DataFrame(rows_all)
 if not df_metricas_por_mes_all.empty:
     df_metricas_por_mes_all = df_metricas_por_mes_all[["País","Departamento","Sitio","Mes de reporte","Indicador","Errores","Chequeos","% Error"]]
