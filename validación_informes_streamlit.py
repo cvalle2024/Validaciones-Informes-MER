@@ -21,7 +21,7 @@ from pathlib import Path
 # ============================
 LOGO_PATH = Path(__file__).parent / "logo.png"
 logo_img = Image.open(LOGO_PATH)
-st.set_page_config(page_title="Validaciones Maestro VIH", page_icon=logo_img, layout="wide")
+st.set_page_config(page_title="Validaciones Informes MER VIHCA", page_icon=logo_img, layout="wide")
 
 c_logo, c_title = st.columns([1, 9])
 with c_logo:
@@ -64,7 +64,7 @@ def render_footer(org="VIHCA / M&E Regional", app_name="Portal de Validación ME
     )
 
 # Llamada (una vez)
-render_footer(org="Proyecto VIHCA", app_name="Validaciones Maestro VIH", version="v1.0.0")
+render_footer(org="Proyecto VIHCA", app_name="Validaciones Informes MER VIHCA", version="v1.0.0")
 
 def _build_doc_md() -> str:
     return r"""
@@ -1452,4 +1452,5 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
 
