@@ -39,7 +39,7 @@ def render_footer(org="VIHCA / M&E Regional", app_name="Portal de Validación ME
                 left: 0;
                 bottom: 0;
                 width: 100%;
-                background: rgba(255,255,255,0.92);
+                background: rgba(120,255,255,0.92);
                 border-top: 1px solid rgba(0,0,0,0.08);
                 padding: 10px 18px;
                 text-align: center;
@@ -1452,5 +1452,6 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+
 
 
