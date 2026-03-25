@@ -691,10 +691,26 @@ def procesar_hts_tst(
         col_resultado
     )
     col_cd4       = _first_col(df_data, "cd4")
-    col_tarv      = (_first_col(df_data, "inicio", "tarv") or
-                     _first_col(df_data, "inicio", "tar"))
-    col_diag      = (_first_col(df_data, "fecha", "diagnostico") or
-                     _first_col(df_data, "fecha", "diagn"))
+
+    # Búsqueda por nombre normalizado exacto primero, luego patrones parciales
+    _cols_norm_map = {_norm(c): c for c in df_data.columns}
+    col_tarv      = (
+        _cols_norm_map.get("fecha de inicio tarv") or
+        _cols_norm_map.get("fecha inicio tarv") or
+        _cols_norm_map.get("fecha de inicio de tarv") or
+        _first_col(df_data, "inicio", "tarv") or
+        _first_col(df_data, "inicio", "tar") or
+        _first_col(df_data, "fecha", "tarv") or
+        _first_col(df_data, "tarv")
+    )
+    col_diag      = (
+        _cols_norm_map.get("fecha del diagnostico") or
+        _cols_norm_map.get("fecha de diagnostico") or
+        _cols_norm_map.get("fecha diagnostico") or
+        _first_col(df_data, "fecha", "diagnostico") or
+        _first_col(df_data, "fecha", "diagn") or
+        _first_col(df_data, "diagnostico")
+    )
     col_sitio     = _first_col(df_data, "servicio", "salud") or _first_col(df_data, "sitio") or _first_col(df_data, "clinica")
     col_pais      = _first_col(df_data, "pais")
     col_depto     = _first_col(df_data, "departamento") or _first_col(df_data, "depto") or _first_col(df_data, "provincia")
@@ -706,8 +722,24 @@ def procesar_hts_tst(
     col_edad      = _first_col(df_data, "edad")
     col_motivo    = _first_col(df_data, "motivo", "cd4")
 
+    # Diagnóstico: excluir columnas que también contengan "tarv"/"tar" para no confundir con TARV
+    if col_diag and col_tarv and col_diag == col_tarv:
+        col_diag = None
+
     if not all([col_resultado, col_cd4, col_diag]):
+        st.warning(
+            f"⚠️ **{nombre_archivo}** – HTS_TST: no se encontraron columnas clave. "
+            f"Resultado=`{col_resultado}` | CD4=`{col_cd4}` | Diagnóstico=`{col_diag}`. "
+            f"Columnas detectadas: {list(df_data.columns)[:15]}"
+        )
         return
+
+    if col_tarv is None:
+        st.warning(
+            f"⚠️ **{nombre_archivo}** – HTS_TST: no se encontró la columna 'Fecha de inicio TARV'. "
+            f"La validación de fechas TARV vs diagnóstico no se ejecutará. "
+            f"Columnas detectadas: {list(df_data.columns)[:15]}"
+        )
 
     # Helpers de fecha
     def _excel_serial_to_datetime(n):
@@ -798,10 +830,20 @@ def procesar_hts_tst(
                 })
 
         # Fecha inicio TARV no debe ser menor que Fecha del diagnóstico
-        if pd.notna(fecha_diag) and pd.notna(fecha_tarv) and str(fecha_tarv).strip():
+        if col_tarv and pd.notna(fecha_diag) and pd.notna(fecha_tarv) and str(fecha_tarv).strip() not in ("", "nan", "None"):
             try:
-                fd = pd.to_datetime(fecha_diag, dayfirst=True, errors="coerce")
-                ft = pd.to_datetime(fecha_tarv, dayfirst=True, errors="coerce")
+                def _parse_fecha(v):
+                    if isinstance(v, (pd.Timestamp, datetime)):
+                        return pd.Timestamp(v)
+                    if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
+                        # Serial de Excel → datetime
+                        base = datetime(1899, 12, 30)
+                        return pd.Timestamp(base + timedelta(days=float(v)))
+                    s = str(v).strip().replace(".", "/").replace("-", "/")
+                    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
+                fd = _parse_fecha(fecha_diag)
+                ft = _parse_fecha(fecha_tarv)
                 if pd.notna(fd) and pd.notna(ft):
                     _add_metric(IND_TARV_GT_DIAG, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
                     if ft < fd:
@@ -820,8 +862,8 @@ def procesar_hts_tst(
                             "Columna Excel Diagnóstico": get_column_letter(col_diag_idx + 1) if col_diag_idx is not None else col_diag,
                             "Columna Excel TARV": get_column_letter(col_tarv_idx + 1) if col_tarv_idx is not None else col_tarv,
                         })
-            except Exception:
-                pass
+            except Exception as _ex_tarv:
+                st.warning(f"⚠️ Error comparando fechas TARV fila {fila_base_hts+i} en {nombre_archivo}: {_ex_tarv}")
 
         # Formato de Fecha Diagnóstico (si celda tiene valor)
         tiene_valor = not (pd.isna(fecha_diag) or str(fecha_diag).strip() == "")
