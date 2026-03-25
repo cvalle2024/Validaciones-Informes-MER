@@ -854,6 +854,7 @@ def procesar_hts_tst(
                             "País": pais_row,
                             "Departamento": depto_row,
                             "Sitio": sitio_row,
+                            "ID expediente": str(_coerce_scalar(row.get(col_id))).strip() if col_id else "",
                             "Mes de reporte": mes_rep,
                             "Archivo": nombre_archivo,
                             "Fecha diagnóstico": fd.date(),
