@@ -206,7 +206,7 @@ DISPLAY_NAMES = {
     IND_DEN_GT_CURR:     "TX_PVLS (Den) > TX_CURR",
     IND_CD4_MISSING:     "CD4 vacío positivo",
     IND_TARV_LT_DIAG:    "Fecha de inicio TARV < Fecha de diagnóstico",
-    IND_TARV_GT_DIAG:    "Fecha de inicio TARV > Fecha de diagnóstico",
+    IND_TARV_GT_DIAG:    "Fecha inicio TARV < Fecha diagnóstico (HTS_TST)",
     IND_DIAG_BAD_FMT:    "Formato fecha diagnóstico",
     IND_CURR_Q1Q2_DIFF:  "TX_CURR ≠ Dispensación_TARV",
     IND_ID_DUPLICADO:    "ID (expediente) duplicado",
@@ -694,8 +694,10 @@ def procesar_hts_tst(
         col_resultado
     )
     col_cd4       = _first_col(df_data, "cd4")
-    col_tarv      = _first_col(df_data, "inicio", "tar")
-    col_diag      = _first_col(df_data, "fecha", "diagn")
+    col_tarv      = (_first_col(df_data, "inicio", "tarv") or
+                     _first_col(df_data, "inicio", "tar"))
+    col_diag      = (_first_col(df_data, "fecha", "diagnostico") or
+                     _first_col(df_data, "fecha", "diagn"))
     col_sitio     = _first_col(df_data, "servicio", "salud") or _first_col(df_data, "sitio") or _first_col(df_data, "clinica")
     col_pais      = _first_col(df_data, "pais")
     col_depto     = _first_col(df_data, "departamento") or _first_col(df_data, "depto") or _first_col(df_data, "provincia")
@@ -813,9 +815,9 @@ def procesar_hts_tst(
                             "Fecha diagnóstico": fd.date(), "Fecha inicio TARV": ft.date(),
                             "Fila Excel": int(fila_base_hts + i), "Columna Excel": col_tarv
                         })
-                    # --- NUEVO: TARV > Diagnóstico ---
+                    # --- NUEVO: TARV < Diagnóstico (no debe ser menor) ---
                     _add_metric(IND_TARV_GT_DIAG, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
-                    if ft > fd:
+                    if ft < fd:
                         _add_metric(IND_TARV_GT_DIAG, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
                         col_diag_idx = list(df_data.columns).index(col_diag) if col_diag in df_data.columns else None
                         col_tarv_idx = list(df_data.columns).index(col_tarv) if col_tarv and col_tarv in df_data.columns else None
@@ -1276,7 +1278,7 @@ with res:
     c2.metric("*TX_PVLS (Den) > TX_CURR*", len(df_txpv_f))
     c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
     c4.metric("*Fecha inicio TARV < Diagnóstico*", len(df_tarv_f))
-    c5.metric("*Fecha inicio TARV > Diagnóstico*", len(df_tarv_gt_f))
+    c5.metric("*Fecha inicio TARV < Diagnóstico (HTS_TST)*", len(df_tarv_gt_f))
     c6.metric("*Fecha diag. mal formateada*", len(df_fdiag_f))
     c7.metric("*TX_CURR ≠ Dispensación_TARV*", len(df_currq_f))
     c8.metric("*ID duplicado - filas detectadas*", len(df_iddup_f))
@@ -1325,7 +1327,7 @@ with det:
         ("TX_PVLS (Den) > TX_CURR",       df_txpv_f,  "— Sin casos Denominador > TX_CURR —"),
         ("CD4 vacío positivo",            df_cd4_f,   "— Sin positivos con CD4 vacío —"),
         ("Fecha de inicio TARV < Fecha de diagnóstico", df_tarv_f, "— Sin casos TARV < Diagnóstico —"),
-        ("Fecha de inicio TARV > Fecha de diagnóstico", df_tarv_gt_f, "— Sin casos TARV > Diagnóstico —"),
+        ("Fecha inicio TARV < Fecha diagnóstico (HTS_TST)", df_tarv_gt_f, "— Sin casos Fecha TARV anterior al diagnóstico —"),
         ("Formato fecha diagnóstico",     df_fdiag_f, "— Sin problemas de formato de fecha —"),
         ("TX_CURR ≠ Dispensación_TARV",   df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —"),
         ("ID (expediente) duplicado",     df_iddup_f, "— Sin IDs (expediente) duplicados —"),
@@ -1360,7 +1362,7 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         "Denominador > TX_CURR": "Denominador (PVLS)",
         "CD4 vacío positivo": ["CD4 Basal", "Motivo de no CD4"],
         "Fecha TARV < Diagnóstico": "Fecha inicio TARV",
-        "Fecha TARV > Diagnóstico": ["Fecha diagnóstico", "Fecha inicio TARV"],
+        "Fecha TARV < Diagnóstico (HTS)": ["Fecha diagnóstico", "Fecha inicio TARV"],
         "Formato fecha diagnóstico": "Fecha del diagnóstico de la prueba",
         "TX_CURR ≠ Dispensación_TARV": "Diferencia (TX_CURR - Disp_TARV)",
         "ID (expediente) duplicado": "ID expediente",
@@ -1412,7 +1414,7 @@ full_dict = {
     "Denominador > TX_CURR": st.session_state.df_txpv,
     "CD4 vacío positivo": st.session_state.df_cd4,
     "Fecha TARV < Diagnóstico": st.session_state.df_tarv,
-    "Fecha TARV > Diagnóstico": st.session_state.df_tarv_gt,
+    "Fecha TARV < Diagnóstico (HTS)": st.session_state.df_tarv_gt,
     "Formato fecha diagnóstico": st.session_state.df_fdiag,
     "TX_CURR ≠ Dispensación_TARV": st.session_state.df_currq,
     "ID (expediente) duplicado": st.session_state.df_iddup,
@@ -1449,7 +1451,7 @@ filt_dict = {
     "Denominador > TX_CURR": df_txpv_f,
     "CD4 vacío positivo": df_cd4_f,
     "Fecha TARV < Diagnóstico": df_tarv_f,
-    "Fecha TARV > Diagnóstico": df_tarv_gt_f,
+    "Fecha TARV < Diagnóstico (HTS)": df_tarv_gt_f,
     "Formato fecha diagnóstico": df_fdiag_f,
     "TX_CURR ≠ Dispensación_TARV": df_currq_f,
     "ID (expediente) duplicado": df_iddup_f,
