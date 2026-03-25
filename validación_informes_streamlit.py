@@ -1130,7 +1130,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]:  # TX_ML
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]:
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -1151,7 +1151,7 @@ df_all = pd.concat(
     ignore_index=True
 ) if any([
     isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
-    for k in ["df_num","df_txpv","df_cd4","df_tarv","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]  # TX_ML
+    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]
 ]) else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
 for c in ["País","Departamento","Sitio","Mes de reporte"]:
