@@ -1619,29 +1619,6 @@ def construir_validacion_txcurr_cohorte(
             _add_metric(IND_TXCURR_COHORTE, pais, q_target, depto, sitio, errors_add=1)
             errores_txcurr_cohorte.append(audit_row.copy())
 
-
-
-def _drop_txcurr_total_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """Elimina filas sintéticas de totales o filas sin sitio real en conciliación/auditoría TX_CURR."""
-    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        return df
-
-    out = df.copy()
-
-    def _bad_series(s: pd.Series) -> pd.Series:
-        vals = s.astype(str).str.strip().str.lower()
-        return vals.isin(["", "nan", "none", "null", "total"])
-
-    bad = pd.Series([False] * len(out), index=out.index)
-    if "Sitio" in out.columns:
-        bad |= _bad_series(out["Sitio"])
-    if "Departamento" in out.columns:
-        bad |= _bad_series(out["Departamento"]) & (~out.get("Sitio", pd.Series("", index=out.index)).astype(str).str.strip().ne(""))
-    if "País" in out.columns:
-        bad |= _bad_series(out["País"]) & _bad_series(out.get("Sitio", pd.Series("", index=out.index)))
-
-    return out.loc[~bad].copy()
-
 # ============================
 # --------- PROCESO ----------
 
@@ -1715,8 +1692,8 @@ if procesar:
     construir_validacion_txcurr_cohorte(stage_curr, stage_new, stage_rtt, stage_ml, errores_txcurr_cohorte, auditoria_txcurr_cohorte)
 
     st.session_state.df_txml_cita = pd.DataFrame(errores_txml_cita)  # TX_ML
-    st.session_state.df_txcurr_cohorte = _drop_txcurr_total_rows(pd.DataFrame(errores_txcurr_cohorte))  # Conciliación TX_CURR
-    st.session_state.df_txcurr_auditoria = _drop_txcurr_total_rows(pd.DataFrame(auditoria_txcurr_cohorte))  # Auditoría TX_CURR
+    st.session_state.df_txcurr_cohorte = pd.DataFrame(errores_txcurr_cohorte)  # Conciliación TX_CURR
+    st.session_state.df_txcurr_auditoria = pd.DataFrame(auditoria_txcurr_cohorte)  # Auditoría TX_CURR
 
     # ===== Reordenar columnas conciliación/auditoría TX_CURR para exportable más limpio
     desired_txcurr_cols = [
@@ -2045,15 +2022,8 @@ def _clean_txcurr_export_df(df: pd.DataFrame) -> pd.DataFrame:
 
     out = out[desired].copy()
     if 'Site' in out.columns:
-        site_norm = out['Site'].astype(str).str.replace('_', ' ', regex=False).str.strip()
-        out['Site'] = site_norm
-        bad_site = site_norm.str.lower().isin(['', 'nan', 'none', 'null', 'total'])
-        out = out.loc[~bad_site].copy()
-
-    if 'Tipo_Error' in out.columns:
-        out['Tipo_Error'] = out['Tipo_Error'].astype(str).str.strip()
-
-    return out.reset_index(drop=True)
+        out = out[out['Site'].astype(str).str.strip().ne('')]
+    return out
 
 # 5) Métricas de calidad (adaptadas al filtro)
 met = st.container(border=True)
