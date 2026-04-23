@@ -1948,6 +1948,83 @@ with det:
         with t:
             show_df_or_note(df_, empty_note, height=340)
 
+
+
+def _clean_txcurr_export_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Limpia las hojas de conciliación/auditoría TX_CURR para exportar sin columnas de archivos.
+    Si el DataFrame contiene un solo trimestre base/comparado, usa esos sufijos en los encabezados.
+    """
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+
+    # Q labels para encabezados dinámicos cuando solo hay una transición en la hoja
+    q_base_vals = [str(x).strip().replace(' ', '') for x in out.get('Trimestre base', pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()]
+    q_cmp_vals  = [str(x).strip().replace(' ', '') for x in out.get('Trimestre comparado', pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()]
+    q_base_lbl = q_base_vals[0] if len(q_base_vals) == 1 else 'Base'
+    q_cmp_lbl  = q_cmp_vals[0] if len(q_cmp_vals) == 1 else 'Comparado'
+
+    # Columnas de modalidad TX_ML -> nombres limpios
+    mod_map = {
+        'TX_ML_Fallecido': 'Fallecido',
+        'TX_ML_ITT 3 a 5 meses en TAR': 'ITT 3 a 5 meses en TAR',
+        'TX_ML_ITT >6 meses en TAR': 'ITT >6 meses en TAR',
+        'TX_ML_ITT<3 meses en TAR': 'ITT<3 meses en TAR',
+        'TX_ML_Paciente rechaza (finaliza) el tratamiento': 'Paciente rechaza (finaliza) el tratamiento',
+        'TX_ML_Paciente transferido': 'Paciente transferido',
+    }
+    for src, dst in mod_map.items():
+        if src not in out.columns:
+            out[src] = 0
+        out[dst] = pd.to_numeric(out[src], errors='coerce').fillna(0).astype(int)
+
+    # Valores Sí/No
+    if 'Estado' in out.columns:
+        out['Cuadra'] = out['Estado'].astype(str).map(lambda s: 'Sí' if str(s).strip().lower() == 'cuadra' else 'No')
+    else:
+        out['Cuadra'] = out.get('Brecha (Real - Esperado)', 0).apply(lambda x: 'Sí' if pd.to_numeric(x, errors='coerce') == 0 else 'No')
+
+    rename_map = {
+        'Sitio': 'Site',
+        'TX_CURR base': f'TX_CURR_Base_{q_base_lbl}',
+        'Traslados recibidos': 'Traslado_Recibido',
+        'TX_ML total': 'TX_ML_Total',
+        'TX_CURR esperado': f'TX_CURR_Esperado_{q_cmp_lbl}',
+        'TX_CURR real': f'TX_CURR_Real_{q_cmp_lbl}',
+        'Brecha (Real - Esperado)': 'Brecha',
+        'Error identificado': 'Tipo_Error',
+    }
+    out = out.rename(columns=rename_map)
+
+    desired = [
+        'Site', f'TX_CURR_Base_{q_base_lbl}', 'TX_NEW', 'TX_RTT', 'Traslado_Recibido', 'TX_ML_Total',
+        'Fallecido', 'ITT 3 a 5 meses en TAR', 'ITT >6 meses en TAR', 'ITT<3 meses en TAR',
+        'Paciente rechaza (finaliza) el tratamiento', 'Paciente transferido',
+        f'TX_CURR_Esperado_{q_cmp_lbl}', f'TX_CURR_Real_{q_cmp_lbl}', 'Brecha', 'Cuadra', 'Tipo_Error'
+    ]
+
+    # Asegurar columnas mínimas
+    for c in desired:
+        if c not in out.columns:
+            out[c] = 0 if c not in ['Site', 'Cuadra', 'Tipo_Error'] else ''
+
+    # Normalizar numéricas
+    for c in desired:
+        if c not in ['Site', 'Cuadra', 'Tipo_Error']:
+            out[c] = pd.to_numeric(out[c], errors='coerce').fillna(0)
+            if c not in ['Brecha']:
+                out[c] = out[c].astype(int)
+            else:
+                try:
+                    out[c] = out[c].astype(int)
+                except Exception:
+                    pass
+
+    out = out[desired].copy()
+    if 'Site' in out.columns:
+        out = out[out['Site'].astype(str).str.strip().ne('')]
+    return out
+
 # 5) Métricas de calidad (adaptadas al filtro)
 met = st.container(border=True)
 with met:
@@ -1975,8 +2052,8 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         "ID (expediente) duplicado": "ID expediente",
         "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",
         "TX_ML: Última cita esperada vacía": "Fecha de su última cita esperada",  # TX_ML
-        "Conciliación TX_CURR trimestral": ["Brecha (Real - Esperado)", "TX_CURR esperado", "TX_CURR real"],
-        "Auditoria_Sitio TX_CURR": ["Brecha (Real - Esperado)", "TX_CURR esperado", "TX_CURR real"],
+        "Conciliación TX_CURR trimestral": ["Brecha", "TX_CURR_Esperado_Comparado", "TX_CURR_Real_Comparado"],
+        "Auditoria_Sitio TX_CURR": ["Brecha", "TX_CURR_Esperado_Comparado", "TX_CURR_Real_Comparado"],
     }
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -2008,6 +2085,9 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         campo_rojo = config_resaltado.get(nombre)
         if campo_rojo:
             campos = campo_rojo if isinstance(campo_rojo, list) else [campo_rojo]
+            if nombre in ["Conciliación TX_CURR trimestral", "Auditoria_Sitio TX_CURR"]:
+                # Buscar dinámicamente columnas equivalentes en el export limpio
+                campos = [c for c in df.columns if c == "Brecha" or str(c).startswith("TX_CURR_Esperado_") or str(c).startswith("TX_CURR_Real_")]
             for camp in campos:
                 if camp in df.columns:
                     col_idx = list(df.columns).index(camp) + 1
@@ -2017,6 +2097,9 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
 
     out = io.BytesIO(); wb.save(out); out.seek(0)
     return out.getvalue()
+
+df_txcurr_cohorte_export_all = _clean_txcurr_export_df(st.session_state.df_txcurr_cohorte)
+df_txcurr_auditoria_export_all = _clean_txcurr_export_df(st.session_state.df_txcurr_auditoria)
 
 full_dict = {
     "Numerador > Denominador": st.session_state.df_num,
@@ -2028,8 +2111,8 @@ full_dict = {
     "ID (expediente) duplicado": st.session_state.df_iddup,
     "Sexo inválido (HTS_TST)": st.session_state.df_sexo,
     "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,  # TX_ML
-    "Conciliación TX_CURR trimestral": st.session_state.df_txcurr_cohorte,
-    "Auditoria_Sitio TX_CURR": st.session_state.df_txcurr_auditoria,
+    "Conciliación TX_CURR trimestral": df_txcurr_cohorte_export_all,
+    "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_export_all,
 }
 
 rows_metrics_global = [
@@ -2056,6 +2139,9 @@ if not df_metricas_por_mes_all.empty:
 
 bytes_excel_full = exportar_excel_resultados(full_dict, df_metricas_global_all, df_metricas_por_mes_all)
 
+df_txcurr_cohorte_export_f = _clean_txcurr_export_df(df_txcurr_cohorte_f)
+df_txcurr_auditoria_export_f = _clean_txcurr_export_df(df_txcurr_auditoria_f)
+
 filt_dict = {
     "Numerador > Denominador": df_num_f,
     "Denominador > TX_CURR": df_txpv_f,
@@ -2066,8 +2152,8 @@ filt_dict = {
     "ID (expediente) duplicado": df_iddup_f,
     "Sexo inválido (HTS_TST)": df_sexo_f,
     "TX_ML: Última cita esperada vacía": df_txml_cita_f,  # TX_ML
-    "Conciliación TX_CURR trimestral": df_txcurr_cohorte_f,
-    "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_f,
+    "Conciliación TX_CURR trimestral": df_txcurr_cohorte_export_f,
+    "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_export_f,
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
