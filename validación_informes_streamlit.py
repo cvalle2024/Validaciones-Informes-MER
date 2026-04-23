@@ -1975,19 +1975,25 @@ with det:
 
 def _clean_txcurr_export_df(df: pd.DataFrame) -> pd.DataFrame:
     """Limpia las hojas de conciliación/auditoría TX_CURR para exportar sin columnas de archivos.
-    Si el DataFrame contiene un solo trimestre base/comparado, usa esos sufijos en los encabezados.
+    Siempre conserva Q_Base y Q_Comparado por fila; si la hoja contiene una sola transición,
+    también usa esos sufijos en los encabezados dinámicos.
     """
     if df is None or df.empty:
         return df
     out = df.copy()
 
-    # Q labels para encabezados dinámicos cuando solo hay una transición en la hoja
-    q_base_vals = [str(x).strip().replace(' ', '') for x in out.get('Trimestre base', pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()]
-    q_cmp_vals  = [str(x).strip().replace(' ', '') for x in out.get('Trimestre comparado', pd.Series(dtype=str)).dropna().unique().tolist() if str(x).strip()]
+    q_base_series = out.get('Trimestre base', pd.Series(dtype=str)).astype(str).str.strip().str.replace(' ', '', regex=False)
+    q_cmp_series = out.get('Trimestre comparado', pd.Series(dtype=str)).astype(str).str.strip().str.replace(' ', '', regex=False)
+    q_base_vals = [x for x in q_base_series.dropna().unique().tolist() if str(x).strip() and str(x).strip().lower() not in ['nan', 'none', 'null']]
+    q_cmp_vals  = [x for x in q_cmp_series.dropna().unique().tolist() if str(x).strip() and str(x).strip().lower() not in ['nan', 'none', 'null']]
     q_base_lbl = q_base_vals[0] if len(q_base_vals) == 1 else 'Base'
     q_cmp_lbl  = q_cmp_vals[0] if len(q_cmp_vals) == 1 else 'Comparado'
 
-    # Columnas de modalidad TX_ML -> nombres limpios
+    out['Q_Base'] = q_base_series
+    out['Q_Comparado'] = q_cmp_series
+    out['Transición'] = out['Q_Base'].astype(str).str.strip() + ' -> ' + out['Q_Comparado'].astype(str).str.strip()
+    out['Transición'] = out['Transición'].str.replace(r'^\s*->\s*$', '', regex=True)
+
     mod_map = {
         'TX_ML_Fallecido': 'Fallecido',
         'TX_ML_ITT 3 a 5 meses en TAR': 'ITT 3 a 5 meses en TAR',
@@ -2001,7 +2007,6 @@ def _clean_txcurr_export_df(df: pd.DataFrame) -> pd.DataFrame:
             out[src] = 0
         out[dst] = pd.to_numeric(out[src], errors='coerce').fillna(0).astype(int)
 
-    # Valores Sí/No
     if 'Estado' in out.columns:
         out['Cuadra'] = out['Estado'].astype(str).map(lambda s: 'Sí' if str(s).strip().lower() == 'cuadra' else 'No')
     else:
@@ -2020,28 +2025,23 @@ def _clean_txcurr_export_df(df: pd.DataFrame) -> pd.DataFrame:
     out = out.rename(columns=rename_map)
 
     desired = [
-        'Site', f'TX_CURR_Base_{q_base_lbl}', 'TX_NEW', 'TX_RTT', 'Traslado_Recibido', 'TX_ML_Total',
+        'Q_Base', 'Q_Comparado', 'Transición', 'Site', f'TX_CURR_Base_{q_base_lbl}', 'TX_NEW', 'TX_RTT', 'Traslado_Recibido', 'TX_ML_Total',
         'Fallecido', 'ITT 3 a 5 meses en TAR', 'ITT >6 meses en TAR', 'ITT<3 meses en TAR',
         'Paciente rechaza (finaliza) el tratamiento', 'Paciente transferido',
         f'TX_CURR_Esperado_{q_cmp_lbl}', f'TX_CURR_Real_{q_cmp_lbl}', 'Brecha', 'Cuadra', 'Tipo_Error'
     ]
 
-    # Asegurar columnas mínimas
     for c in desired:
         if c not in out.columns:
-            out[c] = 0 if c not in ['Site', 'Cuadra', 'Tipo_Error'] else ''
+            out[c] = 0 if c not in ['Q_Base', 'Q_Comparado', 'Transición', 'Site', 'Cuadra', 'Tipo_Error'] else ''
 
-    # Normalizar numéricas
     for c in desired:
-        if c not in ['Site', 'Cuadra', 'Tipo_Error']:
+        if c not in ['Q_Base', 'Q_Comparado', 'Transición', 'Site', 'Cuadra', 'Tipo_Error']:
             out[c] = pd.to_numeric(out[c], errors='coerce').fillna(0)
-            if c not in ['Brecha']:
+            try:
                 out[c] = out[c].astype(int)
-            else:
-                try:
-                    out[c] = out[c].astype(int)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
     out = out[desired].copy()
     if 'Site' in out.columns:
@@ -2050,8 +2050,12 @@ def _clean_txcurr_export_df(df: pd.DataFrame) -> pd.DataFrame:
         bad_site = site_norm.str.lower().isin(['', 'nan', 'none', 'null', 'total'])
         out = out.loc[~bad_site].copy()
 
-    if 'Tipo_Error' in out.columns:
-        out['Tipo_Error'] = out['Tipo_Error'].astype(str).str.strip()
+    for c in ['Q_Base', 'Q_Comparado', 'Transición', 'Tipo_Error']:
+        if c in out.columns:
+            out[c] = out[c].astype(str).str.strip()
+
+    bad_q = out['Q_Base'].str.lower().isin(['', 'nan', 'none', 'null']) | out['Q_Comparado'].str.lower().isin(['', 'nan', 'none', 'null'])
+    out = out.loc[~bad_q].copy()
 
     return out.reset_index(drop=True)
 
@@ -2070,6 +2074,32 @@ with met:
 # ============================
 # ---------- DESCARGA --------
 # ============================
+
+def _build_resumen_txcurr_por_transicion(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=["Q_Base", "Q_Comparado", "Transición", "Sitios_Evaluados", "Sitios_Con_Error", "Sitios_Que_Cuadran", "%_Error", "Brecha_Neta", "Brecha_Absoluta"])
+    base_cols = ["Q_Base", "Q_Comparado", "Transición", "Site", "Brecha", "Cuadra"]
+    for c in base_cols:
+        if c not in df.columns:
+            return pd.DataFrame(columns=["Q_Base", "Q_Comparado", "Transición", "Sitios_Evaluados", "Sitios_Con_Error", "Sitios_Que_Cuadran", "%_Error", "Brecha_Neta", "Brecha_Absoluta"])
+    tmp = df.copy()
+    tmp["Brecha"] = pd.to_numeric(tmp["Brecha"], errors="coerce").fillna(0)
+    tmp["Con_Error"] = tmp["Brecha"].ne(0).astype(int)
+    tmp["Cuadra_Num"] = tmp["Brecha"].eq(0).astype(int)
+    resumen = (
+        tmp.groupby(["Q_Base", "Q_Comparado", "Transición"], dropna=False, as_index=False)
+        .agg(
+            Sitios_Evaluados=("Site", "count"),
+            Sitios_Con_Error=("Con_Error", "sum"),
+            Sitios_Que_Cuadran=("Cuadra_Num", "sum"),
+            Brecha_Neta=("Brecha", "sum"),
+            Brecha_Absoluta=("Brecha", lambda s: s.abs().sum()),
+        )
+    )
+    resumen["%_Error"] = ((resumen["Sitios_Con_Error"] / resumen["Sitios_Evaluados"]) * 100).round(2)
+    resumen = resumen[["Q_Base", "Q_Comparado", "Transición", "Sitios_Evaluados", "Sitios_Con_Error", "Sitios_Que_Cuadran", "%_Error", "Brecha_Neta", "Brecha_Absoluta"]]
+    return resumen.sort_values(["Q_Base", "Q_Comparado", "Transición"]).reset_index(drop=True)
+
 def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df_metricas_group: pd.DataFrame) -> bytes:
     # Soporta uno o varios campos por hoja a resaltar (lista o string)
     config_resaltado = {
@@ -2096,6 +2126,9 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         for nombre, df in errores_dict.items():
             if df is not None and not df.empty:
                 df.to_excel(writer, index=False, sheet_name=_safe_sheet_name(nombre, used))
+        resumen_txcurr = _build_resumen_txcurr_por_transicion(errores_dict.get("Auditoria_Sitio TX_CURR", pd.DataFrame()))
+        if resumen_txcurr is not None and not resumen_txcurr.empty:
+            resumen_txcurr.to_excel(writer, index=False, sheet_name=_safe_sheet_name("Resumen_Conciliacion_TX_CURR", used))
         if df_metricas_global is not None and not df_metricas_global.empty:
             df_metricas_global.to_excel(writer, index=False, sheet_name=_safe_sheet_name("Metricas Globales Seleccion", used))
         if df_metricas_group is not None and not df_metricas_group.empty:
