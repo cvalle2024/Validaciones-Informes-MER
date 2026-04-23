@@ -176,6 +176,7 @@ for key, val in {
     "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)
     "df_txml_cita": pd.DataFrame(),  # <-- TX_ML
     "df_txcurr_cohorte": pd.DataFrame(),  # <-- Conciliación TX_CURR
+    "df_txcurr_auditoria": pd.DataFrame(),  # <-- Auditoría tipo Auditoria_Sitio
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
 }.items():
@@ -379,6 +380,62 @@ def _qfy_sort_key(qfy: str):
     fy = int(m.group(2))
     fy = fy + 2000 if fy < 100 else fy
     return (fy, int(m.group(1)))
+
+
+def _canon_text(v) -> str:
+    s = _norm(v).replace("_", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _infer_context_date_from_text(text_value) -> pd.Timestamp:
+    if text_value is None:
+        return pd.NaT
+    s = _canon_text(text_value)
+    if not s:
+        return pd.NaT
+
+    month_num = None
+    for token in re.split(r"[^a-z0-9]+", s):
+        if token in SPANISH_MONTHS:
+            month_num = SPANISH_MONTHS[token]
+            break
+
+    fy_year = None
+    m_fy = re.search(r"fy\s*(\d{2,4})", s, re.IGNORECASE)
+    if m_fy:
+        fy_year = int(m_fy.group(1))
+        fy_year = fy_year + 2000 if fy_year < 100 else fy_year
+
+    calendar_year = None
+    m_y4 = re.search(r"(20\d{2})", s)
+    if m_y4:
+        calendar_year = int(m_y4.group(1))
+    elif month_num is not None:
+        m_y2 = re.search(r"(\d{2})(?!\d)", s)
+        if m_y2:
+            calendar_year = 2000 + int(m_y2.group(1))
+
+    if month_num is None:
+        return pd.NaT
+
+    if fy_year is not None:
+        year = fy_year - 1 if month_num >= 10 else fy_year
+    elif calendar_year is not None:
+        year = calendar_year
+    else:
+        return pd.NaT
+
+    try:
+        return pd.Timestamp(year=year, month=month_num, day=1) + pd.offsets.MonthEnd(0)
+    except Exception:
+        return pd.NaT
+
+def _qfy_from_context_text(*texts) -> Tuple[Optional[str], pd.Timestamp]:
+    for t in texts:
+        dt = _infer_context_date_from_text(t)
+        if pd.notna(dt):
+            return _qfy_from_date(dt), dt
+    return None, pd.NaT
 
 def _join_unique_text(values, sep=" | ", max_items=6) -> str:
     seen = []
@@ -1182,16 +1239,21 @@ def procesar_tx_ml_cita(
             })
 
 
+
 def extraer_stage_txcurr_cohorte(
-    xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
+    xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str, ruta_rel: str,
     stage_curr: List[Dict], stage_new: List[Dict], stage_rtt: List[Dict], stage_ml: List[Dict]
 ):
     """
     Extrae insumos para la conciliación trimestral TX_CURR.
-    Esta versión es tolerante a plantillas MER donde la fila de encabezados
-    no está en la primera fila de la hoja.
+    Reglas corregidas:
+    1) TX_CURR solo usa la PRIMERA tabla (antes del bloque de periodicidad ARV).
+    2) Para TX_NEW / TX_RTT / TX_ML el trimestre se infiere desde ruta/archivo
+       porque varias plantillas traen metadatos superiores desactualizados.
+    3) Para TX_NEW / TX_RTT / TX_ML se excluyen archivos con múltiples sitios
+       dentro de la misma hoja, para evitar duplicación contra archivos sitio-específicos.
     """
-    def _find_header_row(raw: pd.DataFrame, required_tokens: List[str], max_scan: int = 40) -> Optional[int]:
+    def _find_header_row(raw: pd.DataFrame, required_tokens: List[str], max_scan: int = 50) -> Optional[int]:
         lim = min(len(raw), max_scan)
         for r in range(lim):
             vals = [_norm(x) for x in raw.iloc[r].tolist()]
@@ -1199,227 +1261,207 @@ def extraer_stage_txcurr_cohorte(
                 return r
         return None
 
-    def _meta_value_right(raw: pd.DataFrame, label_token: str, max_scan_rows: int = 12, max_look_ahead: int = 8):
-        lim = min(len(raw), max_scan_rows)
-        for r in range(lim):
-            row = raw.iloc[r].tolist()
-            vals = [_norm(x) for x in row]
-            for c, v in enumerate(vals):
-                if label_token in v:
-                    for cc in range(c + 1, min(len(row), c + 1 + max_look_ahead)):
-                        rv = row[cc]
-                        if pd.notna(rv) and str(rv).strip() not in {"", "nan", "None"}:
-                            return rv
-        return None
-
-    def _read_sheet(sheet_name: str, required_tokens: List[str]):
-        if sheet_name not in xl.sheet_names:
-            return None, None, None, None
-        raw = xl.parse(sheet_name, header=None)
-        hdr = _find_header_row(raw, required_tokens)
-        if hdr is None:
-            return None, None, None, None
-        df = xl.parse(sheet_name, header=hdr).copy()
-        df.columns = _dedupe_columns([str(c) for c in df.columns])
-        q_meta = _meta_value_right(raw, "periodo del reporte")
-        m_meta = _meta_value_right(raw, "mes de reporte")
-        return raw, df, q_meta, m_meta
-
     def _pick_col(cols, *patterns):
         return buscar_columna_multi(cols, *patterns)
 
-    # ---- TX_CURR (foto trimestral; se toma la última fecha disponible dentro del trimestre)
+    qfy_ctx, dt_ctx = _qfy_from_context_text(ruta_rel, nombre_archivo, mes_inferido)
+
+    # ---- TX_CURR: solo primer bloque de desagregación por sexo/edad
     try:
-        raw, df, q_meta, m_meta = _read_sheet("TX_CURR", ["sexo", "tipo", "servicio"])
-        if df is not None and not df.empty:
-            col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else _pick_col(df.columns, "pais"))
-            col_depto = _pick_col(df.columns, "departamento") or _pick_col(df.columns, "depto") or _pick_col(df.columns, "provincia")
-            col_sitio = _pick_col(df.columns, "servicio", "salud") or _pick_col(df.columns, "sitio") or _pick_col(df.columns, "clinica")
-            col_fecha = _pick_col(df.columns, "mes", "reporte") or _pick_col(df.columns, "fecha", "reporte")
-            col_qfy = _pick_col(df.columns, "periodo", "tx_curr") or _pick_col(df.columns, "q", "tx_curr") or _pick_col(df.columns, "periodo", "reporte")
-            age_cols = _age_columns_tx_curr(list(df.columns))
-            if col_sitio and age_cols:
-                tmp = df.copy()
-                tmp["País"] = tmp[col_pais].astype(str).str.replace("_", " ", regex=False).str.strip() if col_pais else str(pais_inferido)
-                tmp["Departamento"] = tmp[col_depto].astype(str).str.replace("_", " ", regex=False).str.strip() if col_depto else ""
-                tmp["Sitio"] = tmp[col_sitio].astype(str).str.replace("_", " ", regex=False).str.strip()
-                if col_fecha:
-                    tmp["FechaRepDT"] = tmp[col_fecha].apply(_parse_any_date)
-                else:
-                    tmp["FechaRepDT"] = _parse_any_date(m_meta)
-                tmp["QFY"] = tmp.apply(
-                    lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else q_meta,
-                                             r.get(col_fecha) if col_fecha else m_meta),
-                    axis=1
-                )
-                for c in age_cols:
-                    tmp[c] = pd.to_numeric(tmp[c], errors="coerce").fillna(0)
-                tmp["TX_CURR_row"] = tmp[age_cols].sum(axis=1)
-                tmp = tmp[(tmp["Sitio"].astype(str).str.replace("_", " ", regex=False).str.strip() != "") & tmp["QFY"].notna()]
-                if not tmp.empty:
-                    grp = tmp.groupby(["País", "Departamento", "Sitio", "QFY", "FechaRepDT"], dropna=False, as_index=False)["TX_CURR_row"].sum()
-                    grp["Archivo"] = nombre_archivo
-                    stage_curr.extend(grp.to_dict("records"))
+        if "TX_CURR" in xl.sheet_names:
+            raw = xl.parse("TX_CURR", header=None)
+            hdr = _find_header_row(raw, ["sexo", "servicio"])
+            if hdr is not None:
+                stop_row = len(raw)
+                for r in range(hdr + 1, len(raw)):
+                    row_txt = " ".join(_norm(x) for x in raw.iloc[r].tolist() if _norm(x))
+                    if "indicador:" in row_txt and "periodicidad de entrega" in row_txt:
+                        stop_row = r
+                        break
+
+                df = raw.iloc[hdr + 1:stop_row].copy()
+                df.columns = _dedupe_columns([str(c) for c in raw.iloc[hdr].tolist()])
+
+                col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else _pick_col(df.columns, "pais"))
+                col_depto = _pick_col(df.columns, "departamento") or _pick_col(df.columns, "depto") or _pick_col(df.columns, "provincia")
+                col_sitio = _pick_col(df.columns, "servicio", "salud") or _pick_col(df.columns, "sitio") or _pick_col(df.columns, "clinica")
+                col_fecha = _pick_col(df.columns, "mes", "reporte") or _pick_col(df.columns, "fecha", "reporte")
+                age_cols = _age_columns_tx_curr(list(df.columns))
+
+                if col_sitio and age_cols:
+                    tmp = df.copy()
+                    for c in age_cols:
+                        tmp[c] = pd.to_numeric(tmp[c], errors="coerce").fillna(0)
+
+                    tmp["País"] = tmp[col_pais].apply(_canon_text) if col_pais else _canon_text(pais_inferido)
+                    tmp["Departamento"] = tmp[col_depto].apply(_canon_text) if col_depto else ""
+                    tmp["Sitio"] = tmp[col_sitio].apply(_canon_text)
+                    tmp["FechaRepDT"] = tmp[col_fecha].apply(_parse_any_date) if col_fecha else dt_ctx
+                    tmp["QFY"] = tmp["FechaRepDT"].apply(_qfy_from_date)
+
+                    if qfy_ctx:
+                        tmp.loc[tmp["QFY"].isna(), "QFY"] = qfy_ctx
+                    if pd.notna(dt_ctx):
+                        tmp.loc[tmp["FechaRepDT"].isna(), "FechaRepDT"] = dt_ctx
+
+                    tmp["TX_CURR_row"] = tmp[age_cols].sum(axis=1)
+                    tmp = tmp[(tmp["Sitio"] != "") & (tmp["QFY"].notna())]
+
+                    if not tmp.empty:
+                        grp = tmp.groupby(["País", "Sitio", "QFY", "FechaRepDT"], dropna=False, as_index=False).agg({
+                            "TX_CURR_row": "sum",
+                            "Departamento": lambda s: next((x for x in s.astype(str) if str(x).strip()), "")
+                        })
+                        grp["Archivo"] = nombre_archivo
+                        stage_curr.extend(grp.to_dict("records"))
     except Exception:
         pass
 
-    # ---- TX_NEW (IDs únicos por sitio/trimestre)
-    try:
-        raw, df, q_meta, m_meta = _read_sheet("TX_NEW", ["id", "servicio"])
-        if df is not None and not df.empty:
+    def _stage_event_sheet(sheet_name: str, target: List[Dict], include_rtt=False, include_ml=False):
+        try:
+            if sheet_name not in xl.sheet_names:
+                return
+            raw = xl.parse(sheet_name, header=None)
+            hdr = _find_header_row(raw, ["id", "servicio"])
+            if hdr is None:
+                return
+
+            df = raw.iloc[hdr + 1:].copy()
+            df.columns = _dedupe_columns([str(c) for c in raw.iloc[hdr].tolist()])
+
             col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else _pick_col(df.columns, "pais"))
             col_depto = _pick_col(df.columns, "departamento") or _pick_col(df.columns, "depto") or _pick_col(df.columns, "provincia")
             col_sitio = _pick_col(df.columns, "servicio", "salud") or _pick_col(df.columns, "sitio") or _pick_col(df.columns, "clinica")
-            col_qfy = _pick_col(df.columns, "q", "fy", "tx_new") or _pick_col(df.columns, "q", "tx_new") or _pick_col(df.columns, "periodo", "reporte")
-            col_fecha = _pick_col(df.columns, "fecha", "reporte") or _pick_col(df.columns, "mes", "reporte")
             col_id = _pick_col(df.columns, "id")
-            if col_sitio and col_id:
-                tmp = pd.DataFrame({
-                    "País": df[col_pais].astype(str).str.replace("_", " ", regex=False).str.strip() if col_pais else str(pais_inferido),
-                    "Departamento": df[col_depto].astype(str).str.replace("_", " ", regex=False).str.strip() if col_depto else "",
-                    "Sitio": df[col_sitio].astype(str).str.replace("_", " ", regex=False).str.strip(),
-                    "ID": df[col_id].astype(str).str.replace("_", " ", regex=False).str.strip(),
-                    "QFY": df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else q_meta, r.get(col_fecha) if col_fecha else m_meta), axis=1),
-                    "Archivo": nombre_archivo,
-                })
-                tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["QFY"].notna())].drop_duplicates()
-                stage_new.extend(tmp.to_dict("records"))
-    except Exception:
-        pass
-
-    # ---- TX_RTT (IDs únicos; si no hay columna de tipo, se clasifica como TX_RTT)
-    try:
-        raw, df, q_meta, m_meta = _read_sheet("TX_RTT", ["id", "servicio"])
-        if df is not None and not df.empty:
-            col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else _pick_col(df.columns, "pais"))
-            col_depto = _pick_col(df.columns, "departamento") or _pick_col(df.columns, "depto") or _pick_col(df.columns, "provincia")
-            col_sitio = _pick_col(df.columns, "servicio", "salud") or _pick_col(df.columns, "sitio") or _pick_col(df.columns, "clinica")
-            col_qfy = _pick_col(df.columns, "q", "fy", "tx_rtt") or _pick_col(df.columns, "q", "tx_rtt") or _pick_col(df.columns, "q", "periodo", "reporte") or _pick_col(df.columns, "periodo", "reporte")
-            col_fecha = _pick_col(df.columns, "fecha", "reporte") or _pick_col(df.columns, "mes", "reporte")
-            col_id = _pick_col(df.columns, "id")
-            col_tipo = _pick_col(df.columns, "tipo", "reporte") or _pick_col(df.columns, "modalidad", "reporte")
-            if col_sitio and col_id:
-                tipo_vals = df[col_tipo].astype(str).str.replace("_", " ", regex=False).str.strip() if col_tipo else "TX_RTT"
-                tmp = pd.DataFrame({
-                    "País": df[col_pais].astype(str).str.replace("_", " ", regex=False).str.strip() if col_pais else str(pais_inferido),
-                    "Departamento": df[col_depto].astype(str).str.replace("_", " ", regex=False).str.strip() if col_depto else "",
-                    "Sitio": df[col_sitio].astype(str).str.replace("_", " ", regex=False).str.strip(),
-                    "ID": df[col_id].astype(str).str.replace("_", " ", regex=False).str.strip(),
-                    "QFY": df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else q_meta, r.get(col_fecha) if col_fecha else m_meta), axis=1),
-                    "TipoRTT": tipo_vals,
-                    "Archivo": nombre_archivo,
-                })
-                if "TipoRTT" in tmp.columns:
-                    tmp["TipoRTT"] = tmp["TipoRTT"].astype(str).str.replace("_", " ", regex=False).str.strip().replace({"": "TX_RTT", "nan": "TX_RTT", "None": "TX_RTT"})
-                    tmp["TipoRTT"] = tmp["TipoRTT"].apply(lambda x: "Traslado Recibido" if "traslado" in _norm(x) and "recib" in _norm(x) else "TX_RTT")
-                tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["QFY"].notna())].drop_duplicates()
-                stage_rtt.extend(tmp.to_dict("records"))
-    except Exception:
-        pass
-
-    # ---- TX_ML (IDs únicos por sitio/trimestre; separa por modalidad de reporte)
-    try:
-        raw, df, q_meta, m_meta = _read_sheet("TX_ML", ["id", "servicio"])
-        if df is not None and not df.empty:
-            col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else _pick_col(df.columns, "pais"))
-            col_depto = _pick_col(df.columns, "departamento") or _pick_col(df.columns, "depto") or _pick_col(df.columns, "provincia")
-            col_sitio = _pick_col(df.columns, "servicio", "salud") or _pick_col(df.columns, "sitio") or _pick_col(df.columns, "clinica")
-            col_qfy = _pick_col(df.columns, "q", "fy", "tx_ml") or _pick_col(df.columns, "q", "tx_ml") or _pick_col(df.columns, "q", "periodo", "reporte") or _pick_col(df.columns, "periodo", "reporte")
-            col_fecha = _pick_col(df.columns, "fecha", "reporte") or _pick_col(df.columns, "mes", "reporte")
             col_modalidad = _pick_col(df.columns, "modalidad", "reporte") or _pick_col(df.columns, "modalidad")
-            col_id = _pick_col(df.columns, "id")
-            if col_sitio and col_id:
-                tmp = pd.DataFrame({
-                    "País": df[col_pais].astype(str).str.replace("_", " ", regex=False).str.strip() if col_pais else str(pais_inferido),
-                    "Departamento": df[col_depto].astype(str).str.replace("_", " ", regex=False).str.strip() if col_depto else "",
-                    "Sitio": df[col_sitio].astype(str).str.replace("_", " ", regex=False).str.strip(),
-                    "ID": df[col_id].astype(str).str.replace("_", " ", regex=False).str.strip(),
-                    "QFY": df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else q_meta, r.get(col_fecha) if col_fecha else m_meta), axis=1),
-                    "Modalidad": df[col_modalidad].astype(str).str.replace("_", " ", regex=False).str.strip() if col_modalidad else "",
-                    "Archivo": nombre_archivo,
-                })
-                tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["QFY"].notna())].drop_duplicates()
-                stage_ml.extend(tmp.to_dict("records"))
-    except Exception:
-        pass
+
+            if not (col_sitio and col_id):
+                return
+
+            tmp = pd.DataFrame({
+                "País": df[col_pais].apply(_canon_text) if col_pais else _canon_text(pais_inferido),
+                "Departamento": df[col_depto].apply(_canon_text) if col_depto else "",
+                "Sitio": df[col_sitio].apply(_canon_text),
+                "ID": df[col_id].astype(str).str.strip(),
+            })
+            tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["ID"].str.lower() != "nan")]
+
+            if tmp.empty:
+                return
+
+            # Evita duplicar conteos cuando existe un archivo agregado con múltiples sitios
+            if tmp["Sitio"].nunique(dropna=True) > 1:
+                return
+
+            tmp["QFY"] = qfy_ctx
+            tmp["Archivo"] = nombre_archivo
+
+            if include_rtt:
+                if col_modalidad:
+                    tmp["TipoRTT"] = df.loc[tmp.index, col_modalidad].astype(str).apply(
+                        lambda x: "Traslado Recibido" if ("traslado" in _norm(x) and "recib" in _norm(x)) else "TX_RTT"
+                    )
+                else:
+                    tmp["TipoRTT"] = "TX_RTT"
+
+            if include_ml:
+                tmp["Modalidad"] = df.loc[tmp.index, col_modalidad].astype(str).str.strip() if col_modalidad else ""
+
+            tmp = tmp[tmp["QFY"].notna()].drop_duplicates()
+            target.extend(tmp.to_dict("records"))
+        except Exception:
+            return
+
+    _stage_event_sheet("TX_NEW", stage_new, include_rtt=False, include_ml=False)
+    _stage_event_sheet("TX_RTT", stage_rtt, include_rtt=True, include_ml=False)
+    _stage_event_sheet("TX_ML", stage_ml, include_rtt=False, include_ml=True)
 
 
 def construir_validacion_txcurr_cohorte(
     stage_curr: List[Dict], stage_new: List[Dict], stage_rtt: List[Dict], stage_ml: List[Dict],
-    errores_txcurr_cohorte: List[Dict]
+    errores_txcurr_cohorte: List[Dict], auditoria_txcurr_cohorte: List[Dict]
 ):
     if not stage_curr:
         return
 
     df_curr = pd.DataFrame(stage_curr)
-    df_curr["Archivo"] = df_curr["Archivo"].astype(str)
-    curr_by_date = df_curr.groupby(["País", "Departamento", "Sitio", "QFY", "FechaRepDT"], dropna=False, as_index=False).agg({
+    curr_by_date = df_curr.groupby(["País", "Sitio", "QFY", "FechaRepDT"], dropna=False, as_index=False).agg({
         "TX_CURR_row": "sum",
+        "Departamento": lambda s: next((x for x in s.astype(str) if str(x).strip()), ""),
         "Archivo": lambda s: _join_unique_text(s)
     }).rename(columns={"TX_CURR_row": "TX_CURR_total", "Archivo": "Archivo(s) TX_CURR"})
-    curr_final = curr_by_date.sort_values(["País", "Departamento", "Sitio", "QFY", "FechaRepDT"]).groupby(["País", "Departamento", "Sitio", "QFY"], dropna=False, as_index=False).tail(1).reset_index(drop=True)
+    curr_final = (
+        curr_by_date.sort_values(["País", "Sitio", "QFY", "FechaRepDT"])
+        .groupby(["País", "Sitio", "QFY"], dropna=False, as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
 
     if stage_new:
-        df_new = pd.DataFrame(stage_new).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID"])
-        new_group = df_new.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False).agg({
+        df_new = pd.DataFrame(stage_new).drop_duplicates(["País", "Sitio", "QFY", "ID"])
+        new_group = df_new.groupby(["País", "Sitio", "QFY"], as_index=False).agg({
             "ID": "nunique",
             "Archivo": lambda s: _join_unique_text(s)
         }).rename(columns={"ID": "TX_NEW", "Archivo": "Archivo(s) TX_NEW"})
     else:
-        new_group = pd.DataFrame(columns=["País", "Departamento", "Sitio", "QFY", "TX_NEW", "Archivo(s) TX_NEW"])
+        new_group = pd.DataFrame(columns=["País", "Sitio", "QFY", "TX_NEW", "Archivo(s) TX_NEW"])
 
     if stage_rtt:
-        df_rtt = pd.DataFrame(stage_rtt).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID", "TipoRTT"])
-        rtt_counts = df_rtt.groupby(["País", "Departamento", "Sitio", "QFY", "TipoRTT"], as_index=False)["ID"].nunique()
-        rtt_files = df_rtt.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False)["Archivo"].agg(lambda s: _join_unique_text(s)).rename(columns={"Archivo": "Archivo(s) TX_RTT"})
-        rtt_piv = rtt_counts.pivot_table(index=["País", "Departamento", "Sitio", "QFY"], columns="TipoRTT", values="ID", fill_value=0).reset_index()
+        df_rtt = pd.DataFrame(stage_rtt).drop_duplicates(["País", "Sitio", "QFY", "ID", "TipoRTT"])
+        rtt_counts = df_rtt.groupby(["País", "Sitio", "QFY", "TipoRTT"], as_index=False)["ID"].nunique()
+        rtt_files = df_rtt.groupby(["País", "Sitio", "QFY"], as_index=False)["Archivo"].agg(lambda s: _join_unique_text(s)).rename(columns={"Archivo": "Archivo(s) TX_RTT"})
+        rtt_piv = rtt_counts.pivot_table(index=["País", "Sitio", "QFY"], columns="TipoRTT", values="ID", fill_value=0).reset_index()
         if "TX_RTT" not in rtt_piv.columns:
             rtt_piv["TX_RTT"] = 0
         if "Traslado Recibido" not in rtt_piv.columns:
             rtt_piv["Traslado Recibido"] = 0
-        rtt_group = rtt_piv.merge(rtt_files, on=["País", "Departamento", "Sitio", "QFY"], how="left")
+        rtt_group = rtt_piv.merge(rtt_files, on=["País", "Sitio", "QFY"], how="left")
     else:
-        rtt_group = pd.DataFrame(columns=["País", "Departamento", "Sitio", "QFY", "TX_RTT", "Traslado Recibido", "Archivo(s) TX_RTT"])
+        rtt_group = pd.DataFrame(columns=["País", "Sitio", "QFY", "TX_RTT", "Traslado Recibido", "Archivo(s) TX_RTT"])
 
     if stage_ml:
-        df_ml = pd.DataFrame(stage_ml).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID"])
-        ml_total = df_ml.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False).agg({
+        df_ml_total = pd.DataFrame(stage_ml).drop_duplicates(["País", "Sitio", "QFY", "ID"])
+        ml_total = df_ml_total.groupby(["País", "Sitio", "QFY"], as_index=False).agg({
             "ID": "nunique",
             "Archivo": lambda s: _join_unique_text(s)
         }).rename(columns={"ID": "TX_ML total", "Archivo": "Archivo(s) TX_ML"})
 
-        df_ml_mod = pd.DataFrame(stage_ml).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID", "Modalidad"])
-        mod = df_ml_mod.groupby(["País", "Departamento", "Sitio", "QFY", "Modalidad"], as_index=False)["ID"].nunique()
-        mod = mod.sort_values(["País", "Departamento", "Sitio", "QFY", "ID"], ascending=[True, True, True, True, False])
-        mod_sum = mod.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False).agg({
-            "Modalidad": lambda s: _join_unique_text(s, sep=", "),
-            "ID": lambda s: _join_unique_text([str(int(x)) for x in s], sep=", ")
-        })
-        mod_sum["Modalidades TX_ML"] = mod_sum.apply(lambda r: r["Modalidad"] if not str(r["Modalidad"]).strip() else " | ".join([f"{m}: {c}" for m, c in zip(str(r["Modalidad"]).split(", "), str(r["ID"]).split(", "))]), axis=1)
-        mod_sum = mod_sum[["País", "Departamento", "Sitio", "QFY", "Modalidades TX_ML"]]
-        ml_group = ml_total.merge(mod_sum, on=["País", "Departamento", "Sitio", "QFY"], how="left")
-    else:
-        ml_group = pd.DataFrame(columns=["País", "Departamento", "Sitio", "QFY", "TX_ML total", "Archivo(s) TX_ML", "Modalidades TX_ML"])
+        df_ml_mod = pd.DataFrame(stage_ml).drop_duplicates(["País", "Sitio", "QFY", "ID", "Modalidad"])
+        ml_mod = df_ml_mod.groupby(["País", "Sitio", "QFY", "Modalidad"], as_index=False)["ID"].nunique()
 
-    country_quarters = curr_final.groupby("País")["QFY"].apply(lambda s: set(s.dropna())).to_dict()
+        if not ml_mod.empty:
+            ml_mod_piv = ml_mod.pivot_table(index=["País", "Sitio", "QFY"], columns="Modalidad", values="ID", fill_value=0).reset_index()
+            rename_map = {c: f"TX_ML_{c}" for c in ml_mod_piv.columns if c not in ["País", "Sitio", "QFY"] and str(c).strip() != ""}
+            ml_mod_piv = ml_mod_piv.rename(columns=rename_map)
+            mod_desc = ml_mod.groupby(["País", "Sitio", "QFY"], as_index=False).apply(
+                lambda g: " | ".join([f"{str(r['Modalidad']).strip()}: {int(r['ID'])}" for _, r in g.iterrows() if str(r['Modalidad']).strip()])
+            ).reset_index(name="Modalidades TX_ML")
+            ml_group = ml_total.merge(mod_desc, on=["País", "Sitio", "QFY"], how="left").merge(ml_mod_piv, on=["País", "Sitio", "QFY"], how="left")
+        else:
+            ml_group = ml_total.copy()
+            ml_group["Modalidades TX_ML"] = ""
+    else:
+        ml_group = pd.DataFrame(columns=["País", "Sitio", "QFY", "TX_ML total", "Archivo(s) TX_ML", "Modalidades TX_ML"])
+
+    countries_with_quarters = curr_final.groupby("País")["QFY"].apply(lambda s: set(s.dropna())).to_dict()
 
     for _, rr in curr_final.iterrows():
+        pais = rr["País"]
+        sitio = rr["Sitio"]
         q_target = rr["QFY"]
         q_base = _prev_qfy(q_target)
-        pais = rr["País"]
-        depto = rr["Departamento"]
-        sitio = rr["Sitio"]
-        if not q_base or q_base not in country_quarters.get(pais, set()):
+        if not q_base or q_base not in countries_with_quarters.get(pais, set()):
             continue
 
-        base_row = curr_final[(curr_final["País"] == pais) & (curr_final["Departamento"] == depto) & (curr_final["Sitio"] == sitio) & (curr_final["QFY"] == q_base)]
+        base_row = curr_final[(curr_final["País"] == pais) & (curr_final["Sitio"] == sitio) & (curr_final["QFY"] == q_base)]
+        ng = new_group[(new_group["País"] == pais) & (new_group["Sitio"] == sitio) & (new_group["QFY"] == q_target)]
+        rg = rtt_group[(rtt_group["País"] == pais) & (rtt_group["Sitio"] == sitio) & (rtt_group["QFY"] == q_target)]
+        mg = ml_group[(ml_group["País"] == pais) & (ml_group["Sitio"] == sitio) & (ml_group["QFY"] == q_target)]
+
         base_val = int(base_row["TX_CURR_total"].iloc[0]) if not base_row.empty else 0
         base_fecha = base_row["FechaRepDT"].iloc[0] if not base_row.empty else pd.NaT
         base_arch = base_row["Archivo(s) TX_CURR"].iloc[0] if not base_row.empty else ""
-
-        ng = new_group[(new_group["País"] == pais) & (new_group["Departamento"] == depto) & (new_group["Sitio"] == sitio) & (new_group["QFY"] == q_target)]
-        rg = rtt_group[(rtt_group["País"] == pais) & (rtt_group["Departamento"] == depto) & (rtt_group["Sitio"] == sitio) & (rtt_group["QFY"] == q_target)]
-        mg = ml_group[(ml_group["País"] == pais) & (ml_group["Departamento"] == depto) & (ml_group["Sitio"] == sitio) & (ml_group["QFY"] == q_target)]
+        depto = rr.get("Departamento", "") if str(rr.get("Departamento", "")).strip() else (base_row["Departamento"].iloc[0] if (not base_row.empty and "Departamento" in base_row.columns) else "")
 
         tx_new = int(ng["TX_NEW"].iloc[0]) if not ng.empty else 0
         tx_rtt = int(rg["TX_RTT"].iloc[0]) if (not rg.empty and "TX_RTT" in rg.columns) else 0
@@ -1431,45 +1473,57 @@ def construir_validacion_txcurr_cohorte(
         real = int(rr["TX_CURR_total"])
         brecha = real - esperado
 
+        audit_row = {
+            "País": pais,
+            "Departamento": depto,
+            "Sitio": sitio,
+            "Mes de reporte": q_target,
+            "Trimestre base": q_base,
+            "Trimestre comparado": q_target,
+            "Fecha TX_CURR base": base_fecha.date() if pd.notna(base_fecha) else "",
+            "Fecha TX_CURR comparado": rr["FechaRepDT"].date() if pd.notna(rr["FechaRepDT"]) else "",
+            "Archivo(s) TX_CURR base": base_arch,
+            "Archivo(s) TX_CURR comparado": rr.get("Archivo(s) TX_CURR", ""),
+            "Archivo(s) TX_NEW": ng["Archivo(s) TX_NEW"].iloc[0] if (not ng.empty and "Archivo(s) TX_NEW" in ng.columns) else "",
+            "Archivo(s) TX_RTT": rg["Archivo(s) TX_RTT"].iloc[0] if (not rg.empty and "Archivo(s) TX_RTT" in rg.columns) else "",
+            "Archivo(s) TX_ML": mg["Archivo(s) TX_ML"].iloc[0] if (not mg.empty and "Archivo(s) TX_ML" in mg.columns) else "",
+            "TX_CURR base": base_val,
+            "TX_NEW": tx_new,
+            "TX_RTT": tx_rtt,
+            "Traslados recibidos": tras_rec,
+            "TX_ML total": tx_ml,
+            "Modalidades TX_ML": mods_ml,
+            "TX_CURR esperado": esperado,
+            "TX_CURR real": real,
+            "Brecha (Real - Esperado)": brecha,
+            "Estado": "Cuadra" if brecha == 0 else "No cuadra",
+        }
+
+        # agrega columnas de modalidades TX_ML desagregadas
+        if not mg.empty:
+            for c in mg.columns:
+                if str(c).startswith("TX_ML_") and c not in audit_row:
+                    audit_row[c] = int(mg[c].iloc[0]) if pd.notna(mg[c].iloc[0]) else 0
+
+        if base_row.empty and real > 0:
+            audit_row["Error identificado"] = "Sitio sin base en trimestre previo"
+        elif brecha > 0:
+            audit_row["Error identificado"] = "TX_CURR real mayor al esperado"
+        elif brecha < 0:
+            audit_row["Error identificado"] = "TX_CURR real menor al esperado"
+        else:
+            audit_row["Error identificado"] = "Cuadra"
+
+        auditoria_txcurr_cohorte.append(audit_row)
+
         _add_metric(IND_TXCURR_COHORTE, pais, q_target, depto, sitio, checks_add=1)
         if brecha != 0:
             _add_metric(IND_TXCURR_COHORTE, pais, q_target, depto, sitio, errors_add=1)
-            if base_row.empty and real > 0:
-                error_identificado = "Sitio sin base en trimestre previo"
-            elif brecha > 0:
-                error_identificado = "TX_CURR real mayor al esperado"
-            else:
-                error_identificado = "TX_CURR real menor al esperado"
-
-            errores_txcurr_cohorte.append({
-                "País": pais,
-                "Departamento": depto,
-                "Sitio": sitio,
-                "Mes de reporte": q_target,
-                "Archivo(s) TX_CURR base": base_arch,
-                "Archivo(s) TX_CURR comparado": rr.get("Archivo(s) TX_CURR", ""),
-                "Archivo(s) TX_NEW": ng["Archivo(s) TX_NEW"].iloc[0] if (not ng.empty and "Archivo(s) TX_NEW" in ng.columns) else "",
-                "Archivo(s) TX_RTT": rg["Archivo(s) TX_RTT"].iloc[0] if (not rg.empty and "Archivo(s) TX_RTT" in rg.columns) else "",
-                "Archivo(s) TX_ML": mg["Archivo(s) TX_ML"].iloc[0] if (not mg.empty and "Archivo(s) TX_ML" in mg.columns) else "",
-                "Trimestre base": q_base,
-                "Trimestre comparado": q_target,
-                "Fecha TX_CURR base": base_fecha.date() if pd.notna(base_fecha) else "",
-                "Fecha TX_CURR comparado": rr["FechaRepDT"].date() if pd.notna(rr["FechaRepDT"]) else "",
-                "TX_CURR base": base_val,
-                "TX_NEW": tx_new,
-                "TX_RTT": tx_rtt,
-                "Traslados recibidos": tras_rec,
-                "TX_ML total": tx_ml,
-                "Modalidades TX_ML": mods_ml,
-                "TX_CURR esperado": esperado,
-                "TX_CURR real": real,
-                "Brecha (Real - Esperado)": brecha,
-                "Estado": "No cuadra",
-                "Error identificado": error_identificado,
-            })
+            errores_txcurr_cohorte.append(audit_row.copy())
 
 # ============================
 # --------- PROCESO ----------
+
 # ============================
 if procesar:
     if not subida_multiple:
@@ -1503,6 +1557,7 @@ if procesar:
     errores_sexo = []
     errores_txml_cita = []  # TX_ML
     errores_txcurr_cohorte = []  # Conciliación TX_CURR
+    auditoria_txcurr_cohorte = []  # Auditoría tipo Auditoria_Sitio
 
     stage_curr = []
     stage_new = []
@@ -1523,7 +1578,7 @@ if procesar:
                              errores_sexo, errores_tarv_gt)
             procesar_tx_ml_cita(xl, pais_inf, mes_inf, nombre_archivo, errores_txml_cita)  # TX_ML
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
-            extraer_stage_txcurr_cohorte(xl, pais_inf, mes_inf, nombre_archivo, stage_curr, stage_new, stage_rtt, stage_ml)
+            extraer_stage_txcurr_cohorte(xl, pais_inf, mes_inf, nombre_archivo, ruta_rel, stage_curr, stage_new, stage_rtt, stage_ml)
         except Exception as e:
             st.warning(f"⚠️ Error procesando {nombre_archivo}: {e}")
         progreso.progress(idx/total, text=f"Procesando {idx} de {total}…")
@@ -1536,10 +1591,11 @@ if procesar:
     st.session_state.df_currq    = pd.DataFrame(errores_currq)
     st.session_state.df_iddup    = pd.DataFrame(errores_iddup)
     st.session_state.df_sexo     = pd.DataFrame(errores_sexo)
-    construir_validacion_txcurr_cohorte(stage_curr, stage_new, stage_rtt, stage_ml, errores_txcurr_cohorte)
+    construir_validacion_txcurr_cohorte(stage_curr, stage_new, stage_rtt, stage_ml, errores_txcurr_cohorte, auditoria_txcurr_cohorte)
 
     st.session_state.df_txml_cita = pd.DataFrame(errores_txml_cita)  # TX_ML
     st.session_state.df_txcurr_cohorte = pd.DataFrame(errores_txcurr_cohorte)  # Conciliación TX_CURR
+    st.session_state.df_txcurr_auditoria = pd.DataFrame(auditoria_txcurr_cohorte)  # Auditoría TX_CURR
 
     # ===== Reordenar columnas: asegurar "Modalidad de reporte" justo tras "ID expediente" en TX_ML
     if not st.session_state.df_txml_cita.empty:
@@ -1580,7 +1636,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita","df_txcurr_cohorte"]:
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita","df_txcurr_cohorte","df_txcurr_auditoria"]:
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -1666,6 +1722,7 @@ df_iddup_f    = _aplicar_filtro(st.session_state.df_iddup)
 df_sexo_f     = _aplicar_filtro(st.session_state.df_sexo)
 df_txml_cita_f = _aplicar_filtro(st.session_state.df_txml_cita)  # TX_ML
 df_txcurr_cohorte_f = _aplicar_filtro(st.session_state.df_txcurr_cohorte)  # Conciliación TX_CURR
+df_txcurr_auditoria_f = _aplicar_filtro(st.session_state.df_txcurr_auditoria)  # Auditoría TX_CURR
 
 # Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
@@ -1769,6 +1826,7 @@ with det:
         ("Sexo inválido (HTS_TST)",       df_sexo_f,  "— Sin filas con sexo inválido —"),
         ("TX_ML: Última cita esperada vacía", df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —"),  # TX_ML
         ("Conciliación TX_CURR trimestral", df_txcurr_cohorte_f, "— Sin diferencias en la conciliación trimestral TX_CURR —"),
+        ("Auditoría Sitio TX_CURR", df_txcurr_auditoria_f, "— Sin filas de auditoría TX_CURR —"),
     ]
 
     tabs = st.tabs([title for title, _, _ in tab_specs])
@@ -1804,6 +1862,7 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",
         "TX_ML: Última cita esperada vacía": "Fecha de su última cita esperada",  # TX_ML
         "Conciliación TX_CURR trimestral": ["Brecha (Real - Esperado)", "TX_CURR esperado", "TX_CURR real"],
+        "Auditoria_Sitio TX_CURR": ["Brecha (Real - Esperado)", "TX_CURR esperado", "TX_CURR real"],
     }
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -1856,6 +1915,7 @@ full_dict = {
     "Sexo inválido (HTS_TST)": st.session_state.df_sexo,
     "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,  # TX_ML
     "Conciliación TX_CURR trimestral": st.session_state.df_txcurr_cohorte,
+    "Auditoria_Sitio TX_CURR": st.session_state.df_txcurr_auditoria,
 }
 
 rows_metrics_global = [
@@ -1893,6 +1953,7 @@ filt_dict = {
     "Sexo inválido (HTS_TST)": df_sexo_f,
     "TX_ML: Última cita esperada vacía": df_txml_cita_f,  # TX_ML
     "Conciliación TX_CURR trimestral": df_txcurr_cohorte_f,
+    "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_f,
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
