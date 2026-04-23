@@ -1433,9 +1433,14 @@ def construir_validacion_txcurr_cohorte(
             ml_mod_piv = ml_mod.pivot_table(index=["País", "Sitio", "QFY"], columns="Modalidad", values="ID", fill_value=0).reset_index()
             rename_map = {c: f"TX_ML_{c}" for c in ml_mod_piv.columns if c not in ["País", "Sitio", "QFY"] and str(c).strip() != ""}
             ml_mod_piv = ml_mod_piv.rename(columns=rename_map)
-            mod_desc = ml_mod.groupby(["País", "Sitio", "QFY"], as_index=False).apply(
-                lambda g: " | ".join([f"{str(r['Modalidad']).strip()}: {int(r['ID'])}" for _, r in g.iterrows() if str(r['Modalidad']).strip()])
-            ).reset_index(name="Modalidades TX_ML")
+            mod_desc = ml_mod.groupby(["País", "Sitio", "QFY"]).apply(
+                lambda g: " | ".join([
+                    f"{str(r['Modalidad']).strip()}: {int(r['ID'])}"
+                    for _, r in g.iterrows()
+                    if str(r['Modalidad']).strip()
+                ])
+            ).reset_index()
+            mod_desc.columns = ["País", "Sitio", "QFY", "Modalidades TX_ML"]
             ml_group = ml_total.merge(mod_desc, on=["País", "Sitio", "QFY"], how="left").merge(ml_mod_piv, on=["País", "Sitio", "QFY"], how="left")
         else:
             ml_group = ml_total.copy()
