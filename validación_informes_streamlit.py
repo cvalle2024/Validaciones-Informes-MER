@@ -175,6 +175,7 @@ for key, val in {
     "df_iddup": pd.DataFrame(),    # ID (expediente) duplicado
     "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)
     "df_txml_cita": pd.DataFrame(),  # <-- TX_ML
+    "df_txcurr_cohorte": pd.DataFrame(),  # <-- Conciliación TX_CURR
     "metrics_global": defaultdict(lambda: {"errors": 0, "checks": 0}),
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
 }.items():
@@ -198,6 +199,7 @@ IND_SEXO_INVALID    = "sexo_invalid"      # Sexo inválido (HTS_TST)
 
 # --- Indicador TX_ML
 IND_TXML_CITA_VACIA = "txml_cita_vacia"  # TX_ML
+IND_TXCURR_COHORTE = "txcurr_cohorte_diff"  # Conciliación trimestral TX_CURR
 
 DISPLAY_NAMES = {
     IND_NUM_GT_DEN:      "TX_PVLS (Num) > TX_PVLS (Den)",
@@ -211,6 +213,7 @@ DISPLAY_NAMES = {
 }
 DISPLAY_NAMES.update({
     IND_TXML_CITA_VACIA: "TX_ML: Última cita esperada vacía",  # TX_ML
+    IND_TXCURR_COHORTE: "Conciliación TX_CURR trimestral",
 })
 
 MESES = {
@@ -291,6 +294,113 @@ def month_label_from_value(v: object) -> str:
     except Exception:
         pass
     return str(v).strip()
+
+SPANISH_MONTHS = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
+    "ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+    "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12,
+}
+
+def _parse_any_date(v) -> pd.Timestamp:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return pd.NaT
+    if isinstance(v, (pd.Timestamp, datetime)):
+        return pd.Timestamp(v)
+    if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
+        try:
+            return pd.Timestamp(datetime(1899, 12, 30) + timedelta(days=float(v)))
+        except Exception:
+            pass
+    s = str(v).strip()
+    if not s:
+        return pd.NaT
+    try:
+        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
+        if pd.notna(dt):
+            return dt
+    except Exception:
+        pass
+    sn = _norm(s)
+    m = re.search(r"(\d{1,2})\s+de\s+([a-z]+)\s+de\s+(\d{4})", sn)
+    if m:
+        dia = int(m.group(1))
+        mes = SPANISH_MONTHS.get(m.group(2))
+        anio = int(m.group(3))
+        if mes:
+            try:
+                return pd.Timestamp(year=anio, month=mes, day=dia)
+            except Exception:
+                return pd.NaT
+    return pd.NaT
+
+def _qfy_from_date(dt: pd.Timestamp) -> Optional[str]:
+    if pd.isna(dt):
+        return None
+    mes = int(dt.month)
+    anio = int(dt.year)
+    fy = anio + 1 if mes >= 10 else anio
+    if mes in (10, 11, 12):
+        q = 1
+    elif mes in (1, 2, 3):
+        q = 2
+    elif mes in (4, 5, 6):
+        q = 3
+    else:
+        q = 4
+    return f"Q{q} FY{str(fy)[-2:]}"
+
+def _normalize_qfy(raw_qfy, fallback_date=None) -> Optional[str]:
+    if raw_qfy is not None and not (isinstance(raw_qfy, float) and pd.isna(raw_qfy)):
+        s = str(raw_qfy).strip()
+        m = re.search(r"Q\s*([1-4])\s*FY\s*(\d{2,4})", s, re.IGNORECASE)
+        if m:
+            fy = int(m.group(2))
+            fy = fy + 2000 if fy < 100 else fy
+            return f"Q{int(m.group(1))} FY{str(fy)[-2:]}"
+    dt = _parse_any_date(fallback_date if fallback_date is not None else raw_qfy)
+    return _qfy_from_date(dt)
+
+def _prev_qfy(qfy: str) -> Optional[str]:
+    m = re.search(r"Q\s*([1-4])\s*FY\s*(\d{2,4})", str(qfy).strip(), re.IGNORECASE)
+    if not m:
+        return None
+    q = int(m.group(1))
+    fy = int(m.group(2))
+    fy = fy + 2000 if fy < 100 else fy
+    if q > 1:
+        return f"Q{q-1} FY{str(fy)[-2:]}"
+    return f"Q4 FY{str(fy-1)[-2:]}"
+
+def _qfy_sort_key(qfy: str):
+    m = re.search(r"Q\s*([1-4])\s*FY\s*(\d{2,4})", str(qfy).strip(), re.IGNORECASE)
+    if not m:
+        return (9999, 9)
+    fy = int(m.group(2))
+    fy = fy + 2000 if fy < 100 else fy
+    return (fy, int(m.group(1)))
+
+def _join_unique_text(values, sep=" | ", max_items=6) -> str:
+    seen = []
+    for v in values:
+        s = str(v).strip()
+        if not s or s.lower() in {"nan", "none"}:
+            continue
+        if s not in seen:
+            seen.append(s)
+    if len(seen) <= max_items:
+        return sep.join(seen)
+    return sep.join(seen[:max_items]) + f" | (+{len(seen)-max_items} más)"
+
+def _age_columns_tx_curr(columns: List[str]) -> List[str]:
+    out = []
+    for c in columns:
+        cn = _norm(c)
+        if not cn or "rango" in cn:
+            continue
+        if re.fullmatch(r"<\s*1 ano", cn) or re.fullmatch(r"\d{1,2}\s*-\s*\d{1,2}\s*anos?", cn) or cn.startswith("65"):
+            out.append(c)
+    return out
 
 def inferir_pais_mes(path_rel: str, default_pais: str, default_mes: str):
     ruta = path_rel.replace("\\", "/")
@@ -1071,6 +1181,246 @@ def procesar_tx_ml_cita(
                 "Columna Excel": get_column_letter(col_cita_exp_idx + 1)
             })
 
+
+def extraer_stage_txcurr_cohorte(
+    xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
+    stage_curr: List[Dict], stage_new: List[Dict], stage_rtt: List[Dict], stage_ml: List[Dict]
+):
+    # ---- TX_CURR (foto trimestral; se toma la última fecha disponible dentro del trimestre)
+    if "TX_CURR" in xl.sheet_names:
+        try:
+            df = xl.parse("TX_CURR").copy()
+            if not df.empty:
+                col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else None)
+                col_depto = buscar_columna_multi(df.columns, "departamento") or buscar_columna_multi(df.columns, "depto") or buscar_columna_multi(df.columns, "provincia")
+                col_sitio = buscar_columna_multi(df.columns, "servicio", "salud") or buscar_columna_multi(df.columns, "sitio") or buscar_columna_multi(df.columns, "clinica")
+                col_fecha = buscar_columna_multi(df.columns, "mes", "reporte") or buscar_columna_multi(df.columns, "fecha", "reporte")
+                col_qfy = buscar_columna_multi(df.columns, "periodo", "tx_curr") or buscar_columna_multi(df.columns, "q", "tx_curr")
+                age_cols = _age_columns_tx_curr(list(df.columns))
+                if col_sitio and age_cols:
+                    df["País"] = df[col_pais].astype(str).str.strip() if col_pais else str(pais_inferido)
+                    df["Departamento"] = df[col_depto].astype(str).str.strip() if col_depto else ""
+                    df["Sitio"] = df[col_sitio].astype(str).str.strip()
+                    df["FechaRepDT"] = df[col_fecha].apply(_parse_any_date) if col_fecha else pd.NaT
+                    df["QFY"] = df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else None, r.get(col_fecha) if col_fecha else None), axis=1)
+                    for c in age_cols:
+                        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+                    df["TX_CURR_row"] = df[age_cols].sum(axis=1)
+                    df = df[(df["Sitio"].astype(str).str.strip() != "") & df["QFY"].notna()]
+                    if not df.empty:
+                        grp = df.groupby(["País", "Departamento", "Sitio", "QFY", "FechaRepDT"], dropna=False, as_index=False)["TX_CURR_row"].sum()
+                        grp["Archivo"] = nombre_archivo
+                        stage_curr.extend(grp.to_dict("records"))
+        except Exception:
+            pass
+
+    # ---- TX_NEW (IDs únicos por sitio/trimestre)
+    if "TX_NEW" in xl.sheet_names:
+        try:
+            df = xl.parse("TX_NEW").copy()
+            if not df.empty and "ID" in df.columns:
+                col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else None)
+                col_depto = buscar_columna_multi(df.columns, "departamento") or buscar_columna_multi(df.columns, "depto") or buscar_columna_multi(df.columns, "provincia")
+                col_sitio = buscar_columna_multi(df.columns, "servicio", "salud") or buscar_columna_multi(df.columns, "sitio") or buscar_columna_multi(df.columns, "clinica")
+                col_qfy = buscar_columna_multi(df.columns, "q", "fy", "tx_new") or buscar_columna_multi(df.columns, "q", "tx_new")
+                col_fecha = buscar_columna_multi(df.columns, "fecha", "reporte") or buscar_columna_multi(df.columns, "mes", "reporte")
+                if col_sitio:
+                    tmp = pd.DataFrame({
+                        "País": df[col_pais].astype(str).str.strip() if col_pais else str(pais_inferido),
+                        "Departamento": df[col_depto].astype(str).str.strip() if col_depto else "",
+                        "Sitio": df[col_sitio].astype(str).str.strip(),
+                        "ID": df["ID"].astype(str).str.strip(),
+                        "QFY": df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else None, r.get(col_fecha) if col_fecha else None), axis=1),
+                        "Archivo": nombre_archivo,
+                    })
+                    tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["QFY"].notna())].drop_duplicates()
+                    stage_new.extend(tmp.to_dict("records"))
+        except Exception:
+            pass
+
+    # ---- TX_RTT (IDs únicos separados entre TX_RTT y Traslado Recibido)
+    if "TX_RTT" in xl.sheet_names:
+        try:
+            df = xl.parse("TX_RTT").copy()
+            if not df.empty and "ID" in df.columns:
+                col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else None)
+                col_depto = buscar_columna_multi(df.columns, "departamento") or buscar_columna_multi(df.columns, "depto") or buscar_columna_multi(df.columns, "provincia")
+                col_sitio = buscar_columna_multi(df.columns, "servicio", "salud") or buscar_columna_multi(df.columns, "sitio") or buscar_columna_multi(df.columns, "clinica")
+                col_qfy = buscar_columna_multi(df.columns, "q", "periodo") or buscar_columna_multi(df.columns, "q", "reporte")
+                col_fecha = buscar_columna_multi(df.columns, "fecha", "reporte") or buscar_columna_multi(df.columns, "mes", "reporte")
+                col_tipo = buscar_columna_multi(df.columns, "tx_rtt", "tranfer") or buscar_columna_multi(df.columns, "transfer") or buscar_columna_multi(df.columns, "tx_rtt")
+                if col_sitio and col_tipo:
+                    def _norm_tipo_rtt(x) -> str:
+                        sx = _norm(x)
+                        if "traslado" in sx and "recib" in sx:
+                            return "Traslado Recibido"
+                        if "tx_rtt" in sx or "transfer" in sx or "tranfer" in sx or "rtt" in sx:
+                            return "TX_RTT"
+                        return str(x).strip()
+                    tmp = pd.DataFrame({
+                        "País": df[col_pais].astype(str).str.strip() if col_pais else str(pais_inferido),
+                        "Departamento": df[col_depto].astype(str).str.strip() if col_depto else "",
+                        "Sitio": df[col_sitio].astype(str).str.strip(),
+                        "ID": df["ID"].astype(str).str.strip(),
+                        "QFY": df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else None, r.get(col_fecha) if col_fecha else None), axis=1),
+                        "TipoRTT": df[col_tipo].apply(_norm_tipo_rtt),
+                        "Archivo": nombre_archivo,
+                    })
+                    tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["QFY"].notna())].drop_duplicates()
+                    stage_rtt.extend(tmp.to_dict("records"))
+        except Exception:
+            pass
+
+    # ---- TX_ML (IDs únicos + resumen por modalidad)
+    if "TX_ML" in xl.sheet_names:
+        try:
+            df = xl.parse("TX_ML").copy()
+            if not df.empty and "ID" in df.columns:
+                col_pais = "País" if "País" in df.columns else ("Pais" if "Pais" in df.columns else None)
+                col_depto = buscar_columna_multi(df.columns, "departamento") or buscar_columna_multi(df.columns, "depto") or buscar_columna_multi(df.columns, "provincia")
+                col_sitio = buscar_columna_multi(df.columns, "servicio", "salud") or buscar_columna_multi(df.columns, "sitio") or buscar_columna_multi(df.columns, "clinica")
+                col_qfy = buscar_columna_multi(df.columns, "q", "fy", "tx_ml") or buscar_columna_multi(df.columns, "q", "tx_ml")
+                col_fecha = buscar_columna_multi(df.columns, "fecha", "reporte") or buscar_columna_multi(df.columns, "mes", "reporte")
+                col_modalidad = buscar_columna_multi(df.columns, "modalidad", "reporte") or buscar_columna_multi(df.columns, "modalidad")
+                if col_sitio:
+                    tmp = pd.DataFrame({
+                        "País": df[col_pais].astype(str).str.strip() if col_pais else str(pais_inferido),
+                        "Departamento": df[col_depto].astype(str).str.strip() if col_depto else "",
+                        "Sitio": df[col_sitio].astype(str).str.strip(),
+                        "ID": df["ID"].astype(str).str.strip(),
+                        "QFY": df.apply(lambda r: _normalize_qfy(r.get(col_qfy) if col_qfy else None, r.get(col_fecha) if col_fecha else None), axis=1),
+                        "Modalidad": df[col_modalidad].astype(str).str.strip() if col_modalidad else "",
+                        "Archivo": nombre_archivo,
+                    })
+                    tmp = tmp[(tmp["Sitio"] != "") & (tmp["ID"] != "") & (tmp["QFY"].notna())].drop_duplicates()
+                    stage_ml.extend(tmp.to_dict("records"))
+        except Exception:
+            pass
+
+def construir_validacion_txcurr_cohorte(
+    stage_curr: List[Dict], stage_new: List[Dict], stage_rtt: List[Dict], stage_ml: List[Dict],
+    errores_txcurr_cohorte: List[Dict]
+):
+    if not stage_curr:
+        return
+
+    df_curr = pd.DataFrame(stage_curr)
+    df_curr["Archivo"] = df_curr["Archivo"].astype(str)
+    curr_by_date = df_curr.groupby(["País", "Departamento", "Sitio", "QFY", "FechaRepDT"], dropna=False, as_index=False).agg({
+        "TX_CURR_row": "sum",
+        "Archivo": lambda s: _join_unique_text(s)
+    }).rename(columns={"TX_CURR_row": "TX_CURR_total", "Archivo": "Archivo(s) TX_CURR"})
+    curr_final = curr_by_date.sort_values(["País", "Departamento", "Sitio", "QFY", "FechaRepDT"]).groupby(["País", "Departamento", "Sitio", "QFY"], dropna=False, as_index=False).tail(1).reset_index(drop=True)
+
+    if stage_new:
+        df_new = pd.DataFrame(stage_new).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID"])
+        new_group = df_new.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False).agg({
+            "ID": "nunique",
+            "Archivo": lambda s: _join_unique_text(s)
+        }).rename(columns={"ID": "TX_NEW", "Archivo": "Archivo(s) TX_NEW"})
+    else:
+        new_group = pd.DataFrame(columns=["País", "Departamento", "Sitio", "QFY", "TX_NEW", "Archivo(s) TX_NEW"])
+
+    if stage_rtt:
+        df_rtt = pd.DataFrame(stage_rtt).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID", "TipoRTT"])
+        rtt_counts = df_rtt.groupby(["País", "Departamento", "Sitio", "QFY", "TipoRTT"], as_index=False)["ID"].nunique()
+        rtt_files = df_rtt.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False)["Archivo"].agg(lambda s: _join_unique_text(s)).rename(columns={"Archivo": "Archivo(s) TX_RTT"})
+        rtt_piv = rtt_counts.pivot_table(index=["País", "Departamento", "Sitio", "QFY"], columns="TipoRTT", values="ID", fill_value=0).reset_index()
+        if "TX_RTT" not in rtt_piv.columns:
+            rtt_piv["TX_RTT"] = 0
+        if "Traslado Recibido" not in rtt_piv.columns:
+            rtt_piv["Traslado Recibido"] = 0
+        rtt_group = rtt_piv.merge(rtt_files, on=["País", "Departamento", "Sitio", "QFY"], how="left")
+    else:
+        rtt_group = pd.DataFrame(columns=["País", "Departamento", "Sitio", "QFY", "TX_RTT", "Traslado Recibido", "Archivo(s) TX_RTT"])
+
+    if stage_ml:
+        df_ml = pd.DataFrame(stage_ml).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID"])
+        ml_total = df_ml.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False).agg({
+            "ID": "nunique",
+            "Archivo": lambda s: _join_unique_text(s)
+        }).rename(columns={"ID": "TX_ML total", "Archivo": "Archivo(s) TX_ML"})
+
+        df_ml_mod = pd.DataFrame(stage_ml).drop_duplicates(["País", "Departamento", "Sitio", "QFY", "ID", "Modalidad"])
+        mod = df_ml_mod.groupby(["País", "Departamento", "Sitio", "QFY", "Modalidad"], as_index=False)["ID"].nunique()
+        mod = mod.sort_values(["País", "Departamento", "Sitio", "QFY", "ID"], ascending=[True, True, True, True, False])
+        mod_sum = mod.groupby(["País", "Departamento", "Sitio", "QFY"], as_index=False).agg({
+            "Modalidad": lambda s: _join_unique_text(s, sep=", "),
+            "ID": lambda s: _join_unique_text([str(int(x)) for x in s], sep=", ")
+        })
+        mod_sum["Modalidades TX_ML"] = mod_sum.apply(lambda r: r["Modalidad"] if not str(r["Modalidad"]).strip() else " | ".join([f"{m}: {c}" for m, c in zip(str(r["Modalidad"]).split(", "), str(r["ID"]).split(", "))]), axis=1)
+        mod_sum = mod_sum[["País", "Departamento", "Sitio", "QFY", "Modalidades TX_ML"]]
+        ml_group = ml_total.merge(mod_sum, on=["País", "Departamento", "Sitio", "QFY"], how="left")
+    else:
+        ml_group = pd.DataFrame(columns=["País", "Departamento", "Sitio", "QFY", "TX_ML total", "Archivo(s) TX_ML", "Modalidades TX_ML"])
+
+    country_quarters = curr_final.groupby("País")["QFY"].apply(lambda s: set(s.dropna())).to_dict()
+
+    for _, rr in curr_final.iterrows():
+        q_target = rr["QFY"]
+        q_base = _prev_qfy(q_target)
+        pais = rr["País"]
+        depto = rr["Departamento"]
+        sitio = rr["Sitio"]
+        if not q_base or q_base not in country_quarters.get(pais, set()):
+            continue
+
+        base_row = curr_final[(curr_final["País"] == pais) & (curr_final["Departamento"] == depto) & (curr_final["Sitio"] == sitio) & (curr_final["QFY"] == q_base)]
+        base_val = int(base_row["TX_CURR_total"].iloc[0]) if not base_row.empty else 0
+        base_fecha = base_row["FechaRepDT"].iloc[0] if not base_row.empty else pd.NaT
+        base_arch = base_row["Archivo(s) TX_CURR"].iloc[0] if not base_row.empty else ""
+
+        ng = new_group[(new_group["País"] == pais) & (new_group["Departamento"] == depto) & (new_group["Sitio"] == sitio) & (new_group["QFY"] == q_target)]
+        rg = rtt_group[(rtt_group["País"] == pais) & (rtt_group["Departamento"] == depto) & (rtt_group["Sitio"] == sitio) & (rtt_group["QFY"] == q_target)]
+        mg = ml_group[(ml_group["País"] == pais) & (ml_group["Departamento"] == depto) & (ml_group["Sitio"] == sitio) & (ml_group["QFY"] == q_target)]
+
+        tx_new = int(ng["TX_NEW"].iloc[0]) if not ng.empty else 0
+        tx_rtt = int(rg["TX_RTT"].iloc[0]) if (not rg.empty and "TX_RTT" in rg.columns) else 0
+        tras_rec = int(rg["Traslado Recibido"].iloc[0]) if (not rg.empty and "Traslado Recibido" in rg.columns) else 0
+        tx_ml = int(mg["TX_ML total"].iloc[0]) if (not mg.empty and "TX_ML total" in mg.columns) else 0
+        mods_ml = mg["Modalidades TX_ML"].iloc[0] if (not mg.empty and "Modalidades TX_ML" in mg.columns) else ""
+
+        esperado = base_val + tx_new + tx_rtt + tras_rec - tx_ml
+        real = int(rr["TX_CURR_total"])
+        brecha = real - esperado
+
+        _add_metric(IND_TXCURR_COHORTE, pais, q_target, depto, sitio, checks_add=1)
+        if brecha != 0:
+            _add_metric(IND_TXCURR_COHORTE, pais, q_target, depto, sitio, errors_add=1)
+            if base_row.empty and real > 0:
+                error_identificado = "Sitio sin base en trimestre previo"
+            elif brecha > 0:
+                error_identificado = "TX_CURR real mayor al esperado"
+            else:
+                error_identificado = "TX_CURR real menor al esperado"
+
+            errores_txcurr_cohorte.append({
+                "País": pais,
+                "Departamento": depto,
+                "Sitio": sitio,
+                "Mes de reporte": q_target,
+                "Archivo(s) TX_CURR base": base_arch,
+                "Archivo(s) TX_CURR comparado": rr.get("Archivo(s) TX_CURR", ""),
+                "Archivo(s) TX_NEW": ng["Archivo(s) TX_NEW"].iloc[0] if (not ng.empty and "Archivo(s) TX_NEW" in ng.columns) else "",
+                "Archivo(s) TX_RTT": rg["Archivo(s) TX_RTT"].iloc[0] if (not rg.empty and "Archivo(s) TX_RTT" in rg.columns) else "",
+                "Archivo(s) TX_ML": mg["Archivo(s) TX_ML"].iloc[0] if (not mg.empty and "Archivo(s) TX_ML" in mg.columns) else "",
+                "Trimestre base": q_base,
+                "Trimestre comparado": q_target,
+                "Fecha TX_CURR base": base_fecha.date() if pd.notna(base_fecha) else "",
+                "Fecha TX_CURR comparado": rr["FechaRepDT"].date() if pd.notna(rr["FechaRepDT"]) else "",
+                "TX_CURR base": base_val,
+                "TX_NEW": tx_new,
+                "TX_RTT": tx_rtt,
+                "Traslados recibidos": tras_rec,
+                "TX_ML total": tx_ml,
+                "Modalidades TX_ML": mods_ml,
+                "TX_CURR esperado": esperado,
+                "TX_CURR real": real,
+                "Brecha (Real - Esperado)": brecha,
+                "Estado": "No cuadra",
+                "Error identificado": error_identificado,
+            })
+
 # ============================
 # --------- PROCESO ----------
 # ============================
@@ -1105,6 +1455,12 @@ if procesar:
     errores_iddup = []
     errores_sexo = []
     errores_txml_cita = []  # TX_ML
+    errores_txcurr_cohorte = []  # Conciliación TX_CURR
+
+    stage_curr = []
+    stage_new = []
+    stage_rtt = []
+    stage_ml = []
 
     st.session_state.metrics_global = defaultdict(lambda: {"errors": 0, "checks": 0})
     st.session_state.metrics_by_pds = defaultdict(lambda: {"errors": 0, "checks": 0})
@@ -1120,6 +1476,7 @@ if procesar:
                              errores_sexo, errores_tarv_gt)
             procesar_tx_ml_cita(xl, pais_inf, mes_inf, nombre_archivo, errores_txml_cita)  # TX_ML
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
+            extraer_stage_txcurr_cohorte(xl, pais_inf, mes_inf, nombre_archivo, stage_curr, stage_new, stage_rtt, stage_ml)
         except Exception as e:
             st.warning(f"⚠️ Error procesando {nombre_archivo}: {e}")
         progreso.progress(idx/total, text=f"Procesando {idx} de {total}…")
@@ -1132,7 +1489,10 @@ if procesar:
     st.session_state.df_currq    = pd.DataFrame(errores_currq)
     st.session_state.df_iddup    = pd.DataFrame(errores_iddup)
     st.session_state.df_sexo     = pd.DataFrame(errores_sexo)
+    construir_validacion_txcurr_cohorte(stage_curr, stage_new, stage_rtt, stage_ml, errores_txcurr_cohorte)
+
     st.session_state.df_txml_cita = pd.DataFrame(errores_txml_cita)  # TX_ML
+    st.session_state.df_txcurr_cohorte = pd.DataFrame(errores_txcurr_cohorte)  # Conciliación TX_CURR
 
     # ===== Reordenar columnas: asegurar "Modalidad de reporte" justo tras "ID expediente" en TX_ML
     if not st.session_state.df_txml_cita.empty:
@@ -1173,7 +1533,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]:
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita","df_txcurr_cohorte"]:
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -1189,12 +1549,12 @@ df_all = pd.concat(
         st.session_state.df_num, st.session_state.df_txpv, st.session_state.df_cd4,
         st.session_state.df_tarv_gt, st.session_state.df_fdiag,
         st.session_state.df_currq, st.session_state.df_iddup, st.session_state.df_sexo,
-        st.session_state.df_txml_cita  # TX_ML
+        st.session_state.df_txml_cita, st.session_state.df_txcurr_cohorte  # TX_ML + Conciliación
     ] if isinstance(df, pd.DataFrame) and not df.empty],
     ignore_index=True
 ) if any([
     isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
-    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita"]
+    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_txml_cita","df_txcurr_cohorte"]
 ]) else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
 for c in ["País","Departamento","Sitio","Mes de reporte"]:
@@ -1258,6 +1618,7 @@ df_currq_f    = _aplicar_filtro(st.session_state.df_currq)
 df_iddup_f    = _aplicar_filtro(st.session_state.df_iddup)
 df_sexo_f     = _aplicar_filtro(st.session_state.df_sexo)
 df_txml_cita_f = _aplicar_filtro(st.session_state.df_txml_cita)  # TX_ML
+df_txcurr_cohorte_f = _aplicar_filtro(st.session_state.df_txcurr_cohorte)  # Conciliación TX_CURR
 
 # Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
@@ -1300,7 +1661,8 @@ df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selecti
 res = st.container(border=True)
 with res:
     st.subheader("⚫ *Resumen de errores por indicador*")
-    c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns(9)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c6, c7, c8, c9, c10 = st.columns(5)
     c1.metric("*TX_PVLS (Num) > TX_PVLS (Den)*", len(df_num_f))
     c2.metric("*TX_PVLS (Den) > TX_CURR*", len(df_txpv_f))
     c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
@@ -1310,6 +1672,7 @@ with res:
     c7.metric("*ID duplicado - filas detectadas*", len(df_iddup_f))
     c8.metric("*Sexo inválido (HTS_TST)*", len(df_sexo_f))
     c9.metric("*TX_ML: Última cita esperada vacía*", len(df_txml_cita_f))
+    c10.metric("*Conciliación TX_CURR trimestral*", len(df_txcurr_cohorte_f))
 
 # 3) Indicadores – % de error (selección)
 sel = st.container(border=True)
@@ -1317,7 +1680,7 @@ with sel:
     st.subheader("📊 *Porcentaje de errores por indicador*")
     cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING,
              IND_TARV_GT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO,
-             IND_SEXO_INVALID, IND_TXML_CITA_VACIA]  # TX_ML
+             IND_SEXO_INVALID, IND_TXML_CITA_VACIA, IND_TXCURR_COHORTE]  # TX_ML + Conciliación
     cols = st.columns(len(cards))
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
     for col, key in zip(cols, cards):
@@ -1358,6 +1721,7 @@ with det:
         ("ID (expediente) duplicado",     df_iddup_f, "— Sin IDs (expediente) duplicados —"),
         ("Sexo inválido (HTS_TST)",       df_sexo_f,  "— Sin filas con sexo inválido —"),
         ("TX_ML: Última cita esperada vacía", df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —"),  # TX_ML
+        ("Conciliación TX_CURR trimestral", df_txcurr_cohorte_f, "— Sin diferencias en la conciliación trimestral TX_CURR —"),
     ]
 
     tabs = st.tabs([title for title, _, _ in tab_specs])
@@ -1392,6 +1756,7 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         "ID (expediente) duplicado": "ID expediente",
         "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",
         "TX_ML: Última cita esperada vacía": "Fecha de su última cita esperada",  # TX_ML
+        "Conciliación TX_CURR trimestral": ["Brecha (Real - Esperado)", "TX_CURR esperado", "TX_CURR real"],
     }
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -1443,6 +1808,7 @@ full_dict = {
     "ID (expediente) duplicado": st.session_state.df_iddup,
     "Sexo inválido (HTS_TST)": st.session_state.df_sexo,
     "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,  # TX_ML
+    "Conciliación TX_CURR trimestral": st.session_state.df_txcurr_cohorte,
 }
 
 rows_metrics_global = [
@@ -1479,6 +1845,7 @@ filt_dict = {
     "ID (expediente) duplicado": df_iddup_f,
     "Sexo inválido (HTS_TST)": df_sexo_f,
     "TX_ML: Última cita esperada vacía": df_txml_cita_f,  # TX_ML
+    "Conciliación TX_CURR trimestral": df_txcurr_cohorte_f,
 }
 bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
 
@@ -1505,7 +1872,6 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
-
 
 
 
