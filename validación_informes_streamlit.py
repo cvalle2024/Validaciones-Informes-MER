@@ -47,8 +47,8 @@ st.markdown("""
 .vh-secthead{ display:flex; align-items:center; gap:9px; margin:2px 0 12px;
   font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
 .vh-secthead .vh-dot{ width:9px; height:22px; border-radius:5px; background:var(--vh-brand); }
-.vh-secthead h3{ margin:0; font-size:16px; font-weight:800; letter-spacing:-.01em; color:var(--vh-ink); }
-.vh-secthead .vh-secthint{ font-size:11.5px; color:var(--vh-soft); font-weight:500; margin-left:auto; }
+.vh-secthead h3{ margin:0; font-size:16px; font-weight:800; letter-spacing:-.01em; color:inherit; }
+.vh-secthead .vh-secthint{ font-size:11.5px; color:inherit; opacity:.6; font-weight:500; margin-left:auto; }
 /* ---- Tira resumen (hero) ---- */
 .vh-hero{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px;
   margin:0 0 14px; font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
