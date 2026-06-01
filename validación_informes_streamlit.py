@@ -2,6 +2,7 @@
 import io
 import os
 import re
+import html
 import zipfile
 import unicodedata
 from datetime import datetime, timedelta
@@ -28,6 +29,74 @@ with c_logo:
     st.image(logo_img, width=300)
 with c_title:
     st.title("✅ Portal de validación de indicadores MER (VIHCA)")
+
+# ============================
+# ----- TEMA / ESTILOS UI ----
+# ============================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+:root{
+  --vh-ink:#1f2933; --vh-soft:#64748b; --vh-border:#e6e9ef;
+  --vh-brand:#0f766e; --vh-brand-d:#0b5d56;
+  --vh-ok:#047857;  --vh-ok-bg:#ecfdf5;  --vh-ok-bd:#a7f3d0;
+  --vh-warn:#b45309;--vh-warn-bg:#fffbeb;--vh-warn-bd:#fde68a;
+  --vh-crit:#b91c1c;--vh-crit-bg:#fef2f2;--vh-crit-bd:#fecaca;
+}
+/* ---- Encabezados de sección ---- */
+.vh-secthead{ display:flex; align-items:center; gap:9px; margin:2px 0 12px;
+  font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
+.vh-secthead .vh-dot{ width:9px; height:22px; border-radius:5px; background:var(--vh-brand); }
+.vh-secthead h3{ margin:0; font-size:16px; font-weight:800; letter-spacing:-.01em; color:var(--vh-ink); }
+.vh-secthead .vh-secthint{ font-size:11.5px; color:var(--vh-soft); font-weight:500; margin-left:auto; }
+/* ---- Tira resumen (hero) ---- */
+.vh-hero{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px;
+  margin:0 0 14px; font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
+.vh-hero .vh-tile{ border-radius:14px; padding:14px 16px; color:#fff;
+  background:linear-gradient(135deg,var(--vh-brand),var(--vh-brand-d));
+  box-shadow:0 6px 18px rgba(15,118,110,.18); }
+.vh-hero .vh-tile.alt{ background:#fff; color:var(--vh-ink); border:1px solid var(--vh-border);
+  box-shadow:0 1px 2px rgba(16,24,40,.05); }
+.vh-hero .vh-tnum{ font-size:26px; font-weight:800; line-height:1; letter-spacing:-.02em; }
+.vh-hero .vh-tlbl{ font-size:11px; font-weight:600; opacity:.92; margin-top:7px; text-transform:uppercase; letter-spacing:.04em; }
+.vh-hero .vh-tctx{ font-size:12px; font-weight:500; margin-top:3px; }
+.vh-hero .vh-tile.alt .vh-tnum{ color:var(--vh-brand); }
+/* ---- Rejilla de tarjetas ---- */
+.vh-grid{ display:grid; gap:11px; grid-template-columns:repeat(auto-fill,minmax(195px,1fr)); margin-top:2px; }
+.vh-card{ position:relative; background:#fff; border:1px solid var(--vh-border);
+  border-radius:14px; padding:13px 15px 12px 18px; overflow:hidden;
+  box-shadow:0 1px 2px rgba(16,24,40,.04); transition:transform .12s ease, box-shadow .12s ease;
+  font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
+.vh-card:hover{ transform:translateY(-2px); box-shadow:0 8px 20px rgba(16,24,40,.10); }
+.vh-card .vh-accent{ position:absolute; left:0; top:0; bottom:0; width:5px; }
+.vh-label{ font-size:11.5px; font-weight:600; color:var(--vh-soft); line-height:1.3; min-height:31px; }
+.vh-value{ font-size:23px; font-weight:800; letter-spacing:-.02em; line-height:1; margin-top:9px; color:var(--vh-ink); }
+.vh-sub{ font-size:11px; font-weight:500; color:var(--vh-soft); margin-top:7px; }
+.vh-pill{ display:inline-flex; align-items:center; font-size:10px; font-weight:700; letter-spacing:.02em;
+  padding:2px 9px; border-radius:999px; margin-top:9px; }
+.vh-ok   .vh-accent{background:var(--vh-ok);}    .vh-ok   .vh-value{color:var(--vh-ok);}
+.vh-warn .vh-accent{background:var(--vh-warn);}  .vh-warn .vh-value{color:var(--vh-warn);}
+.vh-crit .vh-accent{background:var(--vh-crit);}  .vh-crit .vh-value{color:var(--vh-crit);}
+.vh-pill.ok{background:var(--vh-ok-bg); color:var(--vh-ok); border:1px solid var(--vh-ok-bd);}
+.vh-pill.warn{background:var(--vh-warn-bg); color:var(--vh-warn); border:1px solid var(--vh-warn-bd);}
+.vh-pill.crit{background:var(--vh-crit-bg); color:var(--vh-crit); border:1px solid var(--vh-crit-bd);}
+/* ---- Tablas profesionales (encabezado fijo + scroll contenido) ---- */
+.vh-tablewrap{ border:1px solid var(--vh-border); border-radius:12px; overflow:auto;
+  box-shadow:0 1px 2px rgba(16,24,40,.05); background:#fff; max-width:100%; }
+.vh-tablewrap table{ border-collapse:separate; border-spacing:0; width:100%;
+  font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
+.vh-tablewrap thead th{ position:sticky; top:0; z-index:3; background:var(--vh-brand); color:#fff;
+  font-weight:700; font-size:11.5px; text-align:left; padding:9px 13px; white-space:nowrap;
+  border-bottom:2px solid var(--vh-brand-d); }
+.vh-tablewrap tbody td{ padding:7px 13px; font-size:12px; color:var(--vh-ink);
+  border-bottom:1px solid #eef1f6; white-space:nowrap; }
+.vh-tablewrap tbody tr:nth-child(even) td{ background:#f8fafc; }
+.vh-tablewrap tbody tr:hover td{ background:#ecfdf5; }
+.vh-empty{ border:1px dashed var(--vh-border); border-radius:12px; padding:18px;
+  text-align:center; color:var(--vh-soft); font-size:13px; background:#f8fafc;
+  font-family:'Manrope',-apple-system,'Segoe UI',sans-serif; }
+</style>
+""", unsafe_allow_html=True)
 
 def render_footer(org="VIHCA / M&E Regional", app_name="Portal de Validación MER", version="v1.0"):
     year = datetime.now().year
@@ -587,10 +656,88 @@ def _first_col(df: pd.DataFrame, *tokens) -> Optional[str]:
             return c
     return None
 
-def show_df_or_note(df, note="— Sin filas para mostrar —", height=300):
+# ---- Helpers de UI: tarjetas y tablas profesionales ----
+def _sev_pct(p):
+    try:
+        p = float(p)
+    except Exception:
+        p = 0.0
+    if p <= 0:  return "vh-ok"
+    if p < 5:   return "vh-warn"
+    return "vh-crit"
+
+def _sev_count(n):
+    return "vh-ok" if (n or 0) == 0 else "vh-crit"
+
+def _count_card(label, n):
+    sev = _sev_count(n)
+    if sev == "vh-ok":
+        pill_cls, pill_txt = "ok", "Sin hallazgos"
+    else:
+        pill_cls, pill_txt = "crit", "Requiere revisión"
+    return (f'<div class="vh-card {sev}"><span class="vh-accent"></span>'
+            f'<div class="vh-label">{html.escape(str(label))}</div>'
+            f'<div class="vh-value">{int(n):,}</div>'
+            f'<span class="vh-pill {pill_cls}">{pill_txt}</span></div>')
+
+def _pct_card(label, pct, err, chk):
+    sev = _sev_pct(pct)
+    return (f'<div class="vh-card {sev}"><span class="vh-accent"></span>'
+            f'<div class="vh-label">{html.escape(str(label))}</div>'
+            f'<div class="vh-value">{pct}%</div>'
+            f'<div class="vh-sub">{int(err):,} / {int(chk):,} '
+            f'<span style="opacity:.7">err / chequeos</span></div></div>')
+
+def _section_head(title, hint=""):
+    h = f'<span class="vh-secthint">{html.escape(hint)}</span>' if hint else ""
+    st.markdown(f'<div class="vh-secthead"><span class="vh-dot"></span><h3>{html.escape(title)}</h3>{h}</div>',
+                unsafe_allow_html=True)
+
+def show_df_or_note(df, note="— Sin filas para mostrar —", height=340):
+    """Render profesional: encabezado fijo, filas cebra, fuente compacta y scroll contenido."""
     if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-        st.caption(note); return False
-    st.dataframe(df, use_container_width=True, height=height); return True
+        st.markdown(f'<div class="vh-empty">{html.escape(str(note))}</div>', unsafe_allow_html=True)
+        return False
+
+    total = len(df)
+    MAX_ROWS = 1000
+    df_show = df.head(MAX_ROWS).copy()
+
+    styles = [
+        {"selector": "", "props": [("border-collapse", "separate"), ("border-spacing", "0"), ("width", "100%")]},
+        {"selector": "thead th", "props": [
+            ("position", "sticky"), ("top", "0"), ("z-index", "3"),
+            ("background", "#0f766e"), ("color", "#ffffff"), ("font-weight", "700"),
+            ("font-size", "11.5px"), ("text-align", "left"), ("padding", "9px 13px"),
+            ("white-space", "nowrap"), ("border-bottom", "2px solid #0b5d56")]},
+        {"selector": "tbody td", "props": [
+            ("padding", "7px 13px"), ("font-size", "12px"), ("color", "#1f2933"),
+            ("border-bottom", "1px solid #eef1f6"), ("white-space", "nowrap")]},
+        {"selector": "tbody tr:nth-child(even) td", "props": [("background", "#f8fafc")]},
+        {"selector": "tbody tr:hover td", "props": [("background", "#ecfdf5")]},
+    ]
+    try:
+        sty = df_show.style.hide(axis="index")
+    except Exception:
+        sty = df_show.style.hide_index()
+    try:
+        sty = sty.format(na_rep="")
+    except Exception:
+        pass
+    sty = sty.set_table_styles(styles)
+
+    try:
+        tabla_html = sty.to_html()
+    except Exception:
+        tabla_html = df_show.to_html(index=False)
+
+    max_h = int(height) + 90
+    st.markdown(f'<div class="vh-tablewrap" style="max-height:{max_h}px">{tabla_html}</div>',
+                unsafe_allow_html=True)
+    if total > MAX_ROWS:
+        st.caption(f"Mostrando las primeras {MAX_ROWS:,} de {total:,} filas. "
+                   f"El detalle completo está disponible en el Excel descargable.")
+    return True
 
 # ============================
 # ------- VALIDACIONES -------
@@ -1961,36 +2108,58 @@ df_metricas_global_sel, df_metricas_por_mes_sel = _build_metrics_df_from_selecti
 # 2) Resumen
 res = st.container(border=True)
 with res:
-    st.subheader("⚫ *Resumen de errores por indicador*")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c6, c7, c8, c9, c10 = st.columns(5)
-    c11, c12, c13, c14, c15 = st.columns(5)
-    c1.metric("*TX_PVLS (Num) > TX_PVLS (Den)*", len(df_num_f))
-    c2.metric("*TX_PVLS (Den) > TX_CURR*", len(df_txpv_f))
-    c3.metric("*CD4 vacío positivo*", len(df_cd4_f))
-    c4.metric("*Fecha inicio TARV < Diagnóstico*", len(df_tarv_gt_f))
-    c5.metric("*Fecha diag. mal formateada*", len(df_fdiag_f))
-    c6.metric("*TX_CURR ≠ Dispensación_TARV*", len(df_currq_f))
-    c7.metric("*ID duplicado - filas detectadas*", len(df_iddup_f))
-    c8.metric("*Sexo inválido (HTS_TST)*", len(df_sexo_f))
-    c9.metric("*TX_ML: Última cita esperada vacía*", len(df_txml_cita_f))
-    c10.metric("*Conciliación TX_CURR trimestral*", len(df_txcurr_cohorte_f))
-    c11.metric("*Población de riesgo en Femenino*", len(df_pobfem_f))
+    _section_head("Resumen de hallazgos por indicador", "Cifras según la selección activa")
+
+    _resumen_items = [
+        ("TX_PVLS (Num) > TX_PVLS (Den)",   len(df_num_f)),
+        ("TX_PVLS (Den) > TX_CURR",         len(df_txpv_f)),
+        ("CD4 vacío positivo",              len(df_cd4_f)),
+        ("Fecha inicio TARV < Diagnóstico", len(df_tarv_gt_f)),
+        ("Fecha diag. mal formateada",      len(df_fdiag_f)),
+        ("TX_CURR ≠ Dispensación_TARV",     len(df_currq_f)),
+        ("ID duplicado - filas detectadas", len(df_iddup_f)),
+        ("Sexo inválido (HTS_TST)",         len(df_sexo_f)),
+        ("TX_ML: Última cita esperada vacía", len(df_txml_cita_f)),
+        ("Conciliación TX_CURR trimestral", len(df_txcurr_cohorte_f)),
+        ("Población de riesgo en Femenino", len(df_pobfem_f)),
+    ]
+    _total_hallazgos = sum(n for _, n in _resumen_items)
+    _ind_afectados   = sum(1 for _, n in _resumen_items if n > 0)
+    _total_ind       = len(_resumen_items)
+    _ctx_sel = " · ".join([
+        st.session_state.sel_pais if st.session_state.sel_pais != "Todos" else "Todos los países",
+        st.session_state.sel_depto if st.session_state.sel_depto != "Todos" else "Todos los deptos.",
+        st.session_state.sel_sitio if st.session_state.sel_sitio != "Todos" else "Todos los sitios",
+    ])
+    _hero = (
+        '<div class="vh-hero">'
+        f'<div class="vh-tile"><div class="vh-tnum">{_total_hallazgos:,}</div>'
+        f'<div class="vh-tlbl">Hallazgos totales</div></div>'
+        f'<div class="vh-tile alt"><div class="vh-tnum">{_ind_afectados} / {_total_ind}</div>'
+        f'<div class="vh-tlbl">Indicadores con hallazgos</div></div>'
+        f'<div class="vh-tile alt"><div class="vh-tnum" style="font-size:14px;line-height:1.35">'
+        f'{html.escape(_ctx_sel)}</div><div class="vh-tlbl">Selección aplicada</div></div>'
+        '</div>'
+    )
+    st.markdown(_hero, unsafe_allow_html=True)
+    _cards = "".join(_count_card(lbl, n) for lbl, n in _resumen_items)
+    st.markdown(f'<div class="vh-grid">{_cards}</div>', unsafe_allow_html=True)
 
 # 3) Indicadores – % de error (selección)
 sel = st.container(border=True)
 with sel:
-    st.subheader("📊 *Porcentaje de errores por indicador*")
+    _section_head("Porcentaje de error por indicador", "Errores ÷ chequeos realizados")
     cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING,
              IND_TARV_GT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO,
              IND_SEXO_INVALID, IND_TXML_CITA_VACIA, IND_TXCURR_COHORTE,
              IND_POB_FEM_RIESGO]  # TX_ML + Conciliación + Población riesgo Femenino
-    cols = st.columns(len(cards))
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
-    for col, key in zip(cols, cards):
+    _pct_cards = ""
+    for key in cards:
         name = DISPLAY_NAMES[key]
-        v = sel_map.get(name, {"Errores":0, "Chequeos":0, "% Error":0})
-        col.metric(label=name, value=f"{v.get('% Error',0)}%", delta=f"{v.get('Errores',0)} / {v.get('Chequeos',0)} (error/chequeos)")
+        v = sel_map.get(name, {"Errores": 0, "Chequeos": 0, "% Error": 0})
+        _pct_cards += _pct_card(name, v.get("% Error", 0), v.get("Errores", 0), v.get("Chequeos", 0))
+    st.markdown(f'<div class="vh-grid">{_pct_cards}</div>', unsafe_allow_html=True)
 
 # 4) Detalle por indicador
 det = st.container(border=True)
@@ -2013,7 +2182,7 @@ with det:
         </style>
             """, unsafe_allow_html=True)
 
-    st.subheader("🔎 *Detalle por indicador*")
+    _section_head("Detalle por indicador", "Encabezado fijo · desliza para ver más")
 
     tab_specs = [
         ("TX_PVLS (Num) > TX_PVLS (Den)", df_num_f,   "— Sin diferencias de Numerador > Denominador —"),
