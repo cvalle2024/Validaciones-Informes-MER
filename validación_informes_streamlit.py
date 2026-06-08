@@ -626,7 +626,7 @@ def _rename_standard_columns(df: pd.DataFrame) -> pd.DataFrame:
             mapping[c] = "País"
         elif "departamento" in cn or "depto" in cn or "provincia" in cn:
             mapping[c] = "Departamento"
-        elif ("servicio" in cn and "salud" in cn) or "sitio" in cn or "clinica" in cn or "clínica" in cn:
+        elif ("servicio" in cn and "salud" in cn) or ("sitio" in cn and "aledano" not in cn and "registre" not in cn and "nombre" not in cn) or "clinica" in cn or "clínica" in cn:
             mapping[c] = "Sitio"
         elif "mes" in cn and "rep" in cn:
             mapping[c] = "Mes de reporte"
@@ -1073,8 +1073,13 @@ def procesar_hts_tst(
                      _first_col(df_data, "población"))
     col_edad      = _first_col(df_data, "edad")
     col_motivo    = _first_col(df_data, "motivo", "cd4")
-    # Servicio (coincidencia exacta para no confundir con 'Servicio de Salud')
-    col_servicio  = next((c for c in df_data.columns if _norm(c) == "servicio"), None)
+    # Servicio: coincidencia exacta primero (para no confundir con 'Servicio de Salud'),
+    # luego variantes que mencionen aledaño/principal/tipo de servicio.
+    col_servicio  = (next((c for c in df_data.columns if _norm(c) == "servicio"), None) or
+                     next((c for c in df_data.columns if _norm(c) in ("servicio ", "servicio")), None) or
+                     _first_col(df_data, "servicio", "aledano") or
+                     _first_col(df_data, "servicio", "principal") or
+                     _first_col(df_data, "tipo", "servicio"))
     # Nombre del sitio aledaño ("En caso de ser sitio aledaño, registre el nombre")
     col_aledano_nom = (_first_col(df_data, "aledano", "registre", "nombre") or
                        _first_col(df_data, "caso", "aledano", "nombre") or
@@ -1192,7 +1197,9 @@ def procesar_hts_tst(
         # === Validación: Servicio = 'Sitio aledaño' debe traer nombre del sitio aledaño ===
         if col_servicio is not None and col_aledano_nom is not None:
             serv_raw = _coerce_scalar(row.get(col_servicio))
-            es_sitio_aledano = _norm(serv_raw) == "sitio aledano"
+            serv_norm = _norm(serv_raw)
+            # Tolerante a redacción: cualquier valor que mencione "aledaño" y no sea el "principal"
+            es_sitio_aledano = ("aledano" in serv_norm) and ("principal" not in serv_norm)
             if es_sitio_aledano:
                 # El chequeo aplica a cada fila marcada como 'Sitio aledaño'
                 _add_metric(IND_SITIO_ALEDANO, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
