@@ -183,6 +183,8 @@ def _build_doc_md() -> str:
   - Regla: Se verifica que en la columna Sexo, solo se registre `Femenino` o `Masculino`, si no vienen estas dos opciones el sistema detecta como error.
 - **Población de riesgo en Femenino (HTS_TST)**
   - Regla: Se verifica que si en la columna `Sexo` el valor es `Femenino`, el campo `Tipo de población` NO debe ser `Persona(s) en riesgo` ni `Persona(s) en muy alto riesgo`.
+- **Sitio aledaño sin nombre (HTS_TST)**
+  - Regla: Se verifica que si en la columna `Servicio` el valor es `Sitio aledaño`, el campo `En caso de ser sitio aledaño, registre el nombre` NO debe venir vacío. Si está vacío se marca como error indicando país, sitio, mes, fila de Excel y fecha del diagnóstico.
   ## 4. Segmentadores (filtros)
 - En esta sección podrá seleccionar:
     - Orden: **País** → **Departamentos** → **Sitios**.
@@ -246,6 +248,7 @@ for key, val in {
     "df_iddup": pd.DataFrame(),    # ID (expediente) duplicado
     "df_sexo": pd.DataFrame(),     # Sexo inválido (HTS_TST)
     "df_pobfem": pd.DataFrame(),   # Femenino en población de riesgo (HTS_TST)
+    "df_aledano": pd.DataFrame(),  # Sitio aledaño sin nombre registrado (HTS_TST)
     "df_txml_cita": pd.DataFrame(),  # <-- TX_ML
     "df_txcurr_cohorte": pd.DataFrame(),  # <-- Conciliación TX_CURR
     "df_txcurr_auditoria": pd.DataFrame(),  # <-- Auditoría tipo Auditoria_Sitio
@@ -270,6 +273,7 @@ IND_CURR_Q1Q2_DIFF  = "curr_q1q2_diff"    # TX_CURR ≠ Dispensación_TARV
 IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
 IND_SEXO_INVALID    = "sexo_invalid"      # Sexo inválido (HTS_TST)
 IND_POB_FEM_RIESGO  = "pob_fem_riesgo"    # Femenino en población de riesgo (HTS_TST)
+IND_SITIO_ALEDANO   = "sitio_aledano_sin_nombre"  # Sitio aledaño sin nombre (HTS_TST)
 
 # --- Indicador TX_ML
 IND_TXML_CITA_VACIA = "txml_cita_vacia"  # TX_ML
@@ -285,6 +289,7 @@ DISPLAY_NAMES = {
     IND_ID_DUPLICADO:    "ID (expediente) duplicado",
     IND_SEXO_INVALID:    "Sexo inválido (HTS_TST)",
     IND_POB_FEM_RIESGO:  "Población de riesgo en Femenino (HTS_TST)",
+    IND_SITIO_ALEDANO:   "Sitio aledaño sin nombre (HTS_TST)",
 }
 DISPLAY_NAMES.update({
     IND_TXML_CITA_VACIA: "TX_ML: Última cita esperada vacía",  # TX_ML
@@ -1012,7 +1017,7 @@ def procesar_tx_curr_cuadros(
 def procesar_hts_tst(
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
     errores_cd4, errores_formato_fecha_diag, errores_iddup,
-    errores_sexo, errores_tarv_gt, errores_pobfem
+    errores_sexo, errores_tarv_gt, errores_pobfem, errores_aledano
 ):
     if "HTS_TST" not in xl.sheet_names:
         return
@@ -1068,6 +1073,12 @@ def procesar_hts_tst(
                      _first_col(df_data, "población"))
     col_edad      = _first_col(df_data, "edad")
     col_motivo    = _first_col(df_data, "motivo", "cd4")
+    # Servicio (coincidencia exacta para no confundir con 'Servicio de Salud')
+    col_servicio  = next((c for c in df_data.columns if _norm(c) == "servicio"), None)
+    # Nombre del sitio aledaño ("En caso de ser sitio aledaño, registre el nombre")
+    col_aledano_nom = (_first_col(df_data, "aledano", "registre", "nombre") or
+                       _first_col(df_data, "caso", "aledano", "nombre") or
+                       _first_col(df_data, "aledano", "registre"))
 
     # Diagnóstico: excluir columnas que también contengan "tarv"/"tar" para no confundir con TARV
     if col_diag and col_tarv and col_diag == col_tarv:
@@ -1176,6 +1187,32 @@ def procesar_hts_tst(
                         "Tipo de población (valor encontrado)": str(tp_raw).strip(),
                         "Fila Excel": int(fila_base_hts + i),
                         "Columna Excel": get_column_letter(col_pob_idx + 1) if col_pob_idx is not None else col_tipo_pob
+                    })
+
+        # === Validación: Servicio = 'Sitio aledaño' debe traer nombre del sitio aledaño ===
+        if col_servicio is not None and col_aledano_nom is not None:
+            serv_raw = _coerce_scalar(row.get(col_servicio))
+            es_sitio_aledano = _norm(serv_raw) == "sitio aledano"
+            if es_sitio_aledano:
+                # El chequeo aplica a cada fila marcada como 'Sitio aledaño'
+                _add_metric(IND_SITIO_ALEDANO, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+                nom_raw = _coerce_scalar(row.get(col_aledano_nom))
+                nom_vacio = pd.isna(nom_raw) or str(nom_raw).strip().lower() in ("", "nan", "none", "-")
+                if nom_vacio:
+                    _add_metric(IND_SITIO_ALEDANO, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+                    col_nom_idx = list(df_data.columns).index(col_aledano_nom) if col_aledano_nom in df_data.columns else None
+                    errores_aledano.append({
+                        "País": pais_row,
+                        "Departamento": depto_row,
+                        "Sitio": sitio_row,
+                        "Mes de reporte": mes_rep,
+                        "Archivo": nombre_archivo,
+                        "ID expediente": str(_coerce_scalar(row.get(col_id))).strip() if col_id else "",
+                        "Servicio (valor encontrado)": str(serv_raw).strip(),
+                        "En caso de ser sitio aledaño, registre el nombre": "(vacío)",
+                        "Fecha del diagnóstico": str(fecha_diag).strip() if not pd.isna(fecha_diag) else "",
+                        "Fila Excel": int(fila_base_hts + i),
+                        "Columna Excel": get_column_letter(col_nom_idx + 1) if col_nom_idx is not None else col_aledano_nom
                     })
 
         # CHECK duplicados (para %)
@@ -1880,6 +1917,7 @@ if procesar:
     errores_iddup = []
     errores_sexo = []
     errores_pobfem = []
+    errores_aledano = []
     errores_txml_cita = []  # TX_ML
     errores_txcurr_cohorte = []  # Conciliación TX_CURR
     auditoria_txcurr_cohorte = []  # Auditoría tipo Auditoria_Sitio
@@ -1900,7 +1938,7 @@ if procesar:
             procesar_tx_pvls_y_curr(xl, pais_inf, mes_inf, nombre_archivo, errores_numerador, errores_txpvls)
             procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo,
                              errores_cd4, errores_formato_fecha_diag, errores_iddup,
-                             errores_sexo, errores_tarv_gt, errores_pobfem)
+                             errores_sexo, errores_tarv_gt, errores_pobfem, errores_aledano)
             procesar_tx_ml_cita(xl, pais_inf, mes_inf, nombre_archivo, errores_txml_cita)  # TX_ML
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
             extraer_stage_txcurr_cohorte(xl, pais_inf, mes_inf, nombre_archivo, ruta_rel, stage_curr, stage_new, stage_rtt, stage_ml)
@@ -1917,6 +1955,7 @@ if procesar:
     st.session_state.df_iddup    = pd.DataFrame(errores_iddup)
     st.session_state.df_sexo     = pd.DataFrame(errores_sexo)
     st.session_state.df_pobfem   = pd.DataFrame(errores_pobfem)
+    st.session_state.df_aledano  = pd.DataFrame(errores_aledano)
     construir_validacion_txcurr_cohorte(stage_curr, stage_new, stage_rtt, stage_ml, errores_txcurr_cohorte, auditoria_txcurr_cohorte)
 
     st.session_state.df_txml_cita = pd.DataFrame(errores_txml_cita)  # TX_ML
@@ -1978,7 +2017,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_txml_cita","df_txcurr_cohorte","df_txcurr_auditoria"]:
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_aledano","df_txml_cita","df_txcurr_cohorte","df_txcurr_auditoria"]:
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -1995,12 +2034,13 @@ df_all = pd.concat(
         st.session_state.df_tarv_gt, st.session_state.df_fdiag,
         st.session_state.df_currq, st.session_state.df_iddup, st.session_state.df_sexo,
         st.session_state.df_pobfem,
+        st.session_state.df_aledano,
         st.session_state.df_txml_cita, st.session_state.df_txcurr_cohorte  # TX_ML + Conciliación
     ] if isinstance(df, pd.DataFrame) and not df.empty],
     ignore_index=True
 ) if any([
     isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
-    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_txml_cita","df_txcurr_cohorte"]
+    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_aledano","df_txml_cita","df_txcurr_cohorte"]
 ]) else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
 for c in ["País","Departamento","Sitio","Mes de reporte"]:
@@ -2064,6 +2104,7 @@ df_currq_f    = _aplicar_filtro(st.session_state.df_currq)
 df_iddup_f    = _aplicar_filtro(st.session_state.df_iddup)
 df_sexo_f     = _aplicar_filtro(st.session_state.df_sexo)
 df_pobfem_f   = _aplicar_filtro(st.session_state.df_pobfem)
+df_aledano_f  = _aplicar_filtro(st.session_state.df_aledano)
 df_txml_cita_f = _aplicar_filtro(st.session_state.df_txml_cita)  # TX_ML
 df_txcurr_cohorte_f = _aplicar_filtro(st.session_state.df_txcurr_cohorte)  # Conciliación TX_CURR
 df_txcurr_auditoria_f = _aplicar_filtro(st.session_state.df_txcurr_auditoria)  # Auditoría TX_CURR
@@ -2122,6 +2163,7 @@ with res:
         ("TX_ML: Última cita esperada vacía", len(df_txml_cita_f)),
         ("Conciliación TX_CURR trimestral", len(df_txcurr_cohorte_f)),
         ("Población de riesgo en Femenino", len(df_pobfem_f)),
+        ("Sitio aledaño sin nombre",        len(df_aledano_f)),
     ]
     _total_hallazgos = sum(n for _, n in _resumen_items)
     _ind_afectados   = sum(1 for _, n in _resumen_items if n > 0)
@@ -2153,6 +2195,7 @@ with sel:
              IND_TARV_GT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO,
              IND_SEXO_INVALID, IND_TXML_CITA_VACIA, IND_TXCURR_COHORTE,
              IND_POB_FEM_RIESGO]  # TX_ML + Conciliación + Población riesgo Femenino
+    cards.append(IND_SITIO_ALEDANO)  # Sitio aledaño sin nombre
     sel_map = {row["Indicador"]: row for _, row in df_metricas_global_sel.iterrows()} if not df_metricas_global_sel.empty else {}
     _pct_cards = ""
     for key in cards:
@@ -2194,6 +2237,7 @@ with det:
         ("ID (expediente) duplicado",     df_iddup_f, "— Sin IDs (expediente) duplicados —"),
         ("Sexo inválido (HTS_TST)",       df_sexo_f,  "— Sin filas con sexo inválido —"),
         ("Población de riesgo en Femenino", df_pobfem_f, "— Sin filas de Femenino en población de riesgo —"),
+        ("Sitio aledaño sin nombre", df_aledano_f, "— Sin sitios aledaños con nombre vacío —"),
         ("TX_ML: Última cita esperada vacía", df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —"),  # TX_ML
         ("Conciliación TX_CURR trimestral", df_txcurr_cohorte_f, "— Sin diferencias en la conciliación trimestral TX_CURR —"),
         ("Auditoría Sitio TX_CURR", df_txcurr_auditoria_f, "— Sin filas de auditoría TX_CURR —"),
@@ -2349,6 +2393,7 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         "ID (expediente) duplicado": "ID expediente",
         "Sexo inválido (HTS_TST)": "Sexo (valor encontrado)",
         "Población de riesgo en Femenino (HTS_TST)": "Tipo de población (valor encontrado)",
+        "Sitio aledaño sin nombre (HTS_TST)": "En caso de ser sitio aledaño, registre el nombre",
         "TX_ML: Última cita esperada vacía": "Fecha de su última cita esperada",  # TX_ML
         "Conciliación TX_CURR trimestral": ["Brecha", "TX_CURR_Esperado_Comparado", "TX_CURR_Real_Comparado"],
         "Auditoria_Sitio TX_CURR": ["Brecha", "TX_CURR_Esperado_Comparado", "TX_CURR_Real_Comparado"],
@@ -2412,6 +2457,7 @@ full_dict = {
     "ID (expediente) duplicado": st.session_state.df_iddup,
     "Sexo inválido (HTS_TST)": st.session_state.df_sexo,
     "Población de riesgo en Femenino (HTS_TST)": st.session_state.df_pobfem,
+    "Sitio aledaño sin nombre (HTS_TST)": st.session_state.df_aledano,
     "TX_ML: Última cita esperada vacía": st.session_state.df_txml_cita,  # TX_ML
     "Conciliación TX_CURR trimestral": df_txcurr_cohorte_export_all,
     "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_export_all,
@@ -2454,6 +2500,7 @@ filt_dict = {
     "ID (expediente) duplicado": df_iddup_f,
     "Sexo inválido (HTS_TST)": df_sexo_f,
     "Población de riesgo en Femenino (HTS_TST)": df_pobfem_f,
+    "Sitio aledaño sin nombre (HTS_TST)": df_aledano_f,
     "TX_ML: Última cita esperada vacía": df_txml_cita_f,  # TX_ML
     "Conciliación TX_CURR trimestral": df_txcurr_cohorte_export_f,
     "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_export_f,
