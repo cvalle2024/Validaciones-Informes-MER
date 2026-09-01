@@ -168,6 +168,8 @@ def _build_doc_md() -> str:
   - Regla: Se verifica que los registros de las pruebas no se repita el mismo ID en el trimestre.
 - **Fecha de inicio de TARV < Fecha del diagnóstico (HTS_TST)**
   - Regla: La `Fecha inicio TARV`no debe ser menor que la `Fecha del diagnóstico`.
+- **Fecha de vinculación < Fecha del diagnóstico (HTS_TST)**
+  - Regla: La `Fecha de vinculación` no debe ser menor que la `Fecha del diagnóstico`.
 - **CD4 vacío en diagnósticos positivos (HTS_TST)**
   - Regla: Se verifica que si el `Resultado de la prueba es = Positivo`, el campo de `CD4 Basal` no debe estar vacío.
 - **TX_PVLS Numerador > TX_PVLS Denominador**
@@ -243,6 +245,7 @@ for key, val in {
     "df_txpv": pd.DataFrame(),     # Denominador > TX_CURR
     "df_cd4": pd.DataFrame(),      # CD4 vacío positivo
     "df_tarv_gt": pd.DataFrame(),  # TARV inicio < Diagnóstico
+    "df_vinc_gt_diag": pd.DataFrame(),  # Vinculación < Diagnóstico
     "df_fdiag": pd.DataFrame(),    # Formato fecha diagnóstico
     "df_currq": pd.DataFrame(),    # TX_CURR ≠ Dispensación_TARV
     "df_iddup": pd.DataFrame(),    # ID (expediente) duplicado
@@ -268,6 +271,7 @@ IND_NUM_GT_DEN      = "num_gt_den"
 IND_DEN_GT_CURR     = "den_gt_curr"
 IND_CD4_MISSING     = "cd4_missing"
 IND_TARV_GT_DIAG    = "tarv_gt_diag"     # Fecha inicio TARV < Fecha diagnóstico
+IND_VINC_GT_DIAG    = "vinc_gt_diag"     # Fecha vinculación < Fecha diagnóstico
 IND_DIAG_BAD_FMT    = "diag_bad_format"
 IND_CURR_Q1Q2_DIFF  = "curr_q1q2_diff"    # TX_CURR ≠ Dispensación_TARV
 IND_ID_DUPLICADO    = "id_duplicado"      # ID (expediente) duplicado
@@ -284,6 +288,7 @@ DISPLAY_NAMES = {
     IND_DEN_GT_CURR:     "TX_PVLS (Den) > TX_CURR",
     IND_CD4_MISSING:     "CD4 vacío positivo",
     IND_TARV_GT_DIAG:    "Fecha inicio TARV < Fecha diagnóstico (HTS_TST)",
+    IND_VINC_GT_DIAG:    "Fecha vinculación < Fecha diagnóstico (HTS_TST)",
     IND_DIAG_BAD_FMT:    "Formato fecha diagnóstico",
     IND_CURR_Q1Q2_DIFF:  "TX_CURR ≠ Dispensación_TARV",
     IND_ID_DUPLICADO:    "ID (expediente) duplicado",
@@ -1017,7 +1022,7 @@ def procesar_tx_curr_cuadros(
 def procesar_hts_tst(
     xl: pd.ExcelFile, pais_inferido: str, mes_inferido: str, nombre_archivo: str,
     errores_cd4, errores_formato_fecha_diag, errores_iddup,
-    errores_sexo, errores_tarv_gt, errores_pobfem, errores_aledano
+    errores_sexo, errores_tarv_gt, errores_vinc_gt_diag, errores_pobfem, errores_aledano
 ):
     if "HTS_TST" not in xl.sheet_names:
         return
@@ -1058,6 +1063,12 @@ def procesar_hts_tst(
         _first_col(df_data, "fecha", "diagnostico") or
         _first_col(df_data, "fecha", "diagn") or
         _first_col(df_data, "diagnostico")
+    )
+    col_vinc      = (
+        _cols_norm_map.get("fecha de vinculacion") or
+        _cols_norm_map.get("fecha vinculacion") or
+        _first_col(df_data, "fecha", "vinculacion") or
+        _first_col(df_data, "vinculacion")
     )
     col_sitio     = _first_col(df_data, "servicio", "salud") or _first_col(df_data, "sitio") or _first_col(df_data, "clinica")
     col_pais      = _first_col(df_data, "pais")
@@ -1104,6 +1115,13 @@ def procesar_hts_tst(
             f"Columnas detectadas: {list(df_data.columns)[:15]}"
         )
 
+    if col_vinc is None:
+        st.warning(
+            f"⚠️ **{nombre_archivo}** – HTS_TST: no se encontró la columna 'Fecha de vinculación'. "
+            f"La validación de vinculación vs diagnóstico no se ejecutará. "
+            f"Columnas detectadas: {list(df_data.columns)[:15]}"
+        )
+
     # Helpers de fecha
     def _excel_serial_to_datetime(n):
         base = datetime(1899, 12, 30)  # Excel bug 1900
@@ -1131,12 +1149,21 @@ def procesar_hts_tst(
         except Exception:
             return False
 
+    def _parse_fecha(v):
+        if isinstance(v, (pd.Timestamp, datetime)):
+            return pd.Timestamp(v)
+        if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
+            return pd.Timestamp(datetime(1899, 12, 30) + timedelta(days=float(v)))
+        s = str(v).strip().replace(".", "/").replace("-", "/")
+        return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
     fila_base_hts = idx_hts + 2
     for i, row in df_data.iterrows():
         resultado  = str(_coerce_scalar(row.get(col_resultado))).strip().lower()
         cd4        = _coerce_scalar(row.get(col_cd4))
         fecha_diag = _coerce_scalar(row.get(col_diag))
         fecha_tarv = _coerce_scalar(row.get(col_tarv)) if col_tarv else None
+        fecha_vinc = _coerce_scalar(row.get(col_vinc)) if col_vinc else None
         sitio      = _coerce_scalar(row.get(col_sitio)) if col_sitio else ""
         pais_row   = _coerce_scalar(row.get(col_pais))  if col_pais else pais_inferido
         depto_row  = _coerce_scalar(row.get(col_depto)) if col_depto else ""
@@ -1249,16 +1276,6 @@ def procesar_hts_tst(
         # Fecha inicio TARV no debe ser menor que Fecha del diagnóstico
         if col_tarv and pd.notna(fecha_diag) and pd.notna(fecha_tarv) and str(fecha_tarv).strip() not in ("", "nan", "None"):
             try:
-                def _parse_fecha(v):
-                    if isinstance(v, (pd.Timestamp, datetime)):
-                        return pd.Timestamp(v)
-                    if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
-                        # Serial de Excel → datetime
-                        base = datetime(1899, 12, 30)
-                        return pd.Timestamp(base + timedelta(days=float(v)))
-                    s = str(v).strip().replace(".", "/").replace("-", "/")
-                    return pd.to_datetime(s, dayfirst=True, errors="coerce")
-
                 fd = _parse_fecha(fecha_diag)
                 ft = _parse_fecha(fecha_tarv)
                 if pd.notna(fd) and pd.notna(ft):
@@ -1282,6 +1299,35 @@ def procesar_hts_tst(
                         })
             except Exception as _ex_tarv:
                 st.warning(f"⚠️ Error comparando fechas TARV fila {fila_base_hts+i} en {nombre_archivo}: {_ex_tarv}")
+
+        # Fecha de vinculación no debe ser menor que Fecha del diagnóstico
+        if col_vinc and pd.notna(fecha_diag) and pd.notna(fecha_vinc) and str(fecha_vinc).strip() not in ("", "nan", "None"):
+            try:
+                fd = _parse_fecha(fecha_diag)
+                fv = _parse_fecha(fecha_vinc)
+                if pd.notna(fd) and pd.notna(fv):
+                    _add_metric(IND_VINC_GT_DIAG, pais_row, mes_rep, depto_row, sitio_row, checks_add=1)
+                    if fv < fd:
+                        _add_metric(IND_VINC_GT_DIAG, pais_row, mes_rep, depto_row, sitio_row, errors_add=1)
+                        col_diag_idx = list(df_data.columns).index(col_diag) if col_diag in df_data.columns else None
+                        col_vinc_idx = list(df_data.columns).index(col_vinc) if col_vinc in df_data.columns else None
+                        errores_vinc_gt_diag.append({
+                            "País": pais_row,
+                            "Departamento": depto_row,
+                            "Sitio": sitio_row,
+                            "ID expediente": str(_coerce_scalar(row.get(col_id))).strip() if col_id else "",
+                            "Mes de reporte": mes_rep,
+                            "Archivo": nombre_archivo,
+                            "Edad": str(_coerce_scalar(row.get(col_edad))).strip() if col_edad else "",
+                            "Sexo": str(_coerce_scalar(row.get(col_sexo))).strip() if col_sexo else "",
+                            "Fecha diagnóstico": fd.date(),
+                            "Fecha de vinculación": fv.date(),
+                            "Fila Excel": int(fila_base_hts + i),
+                            "Columna Excel Diagnóstico": get_column_letter(col_diag_idx + 1) if col_diag_idx is not None else col_diag,
+                            "Columna Excel Vinculación": get_column_letter(col_vinc_idx + 1) if col_vinc_idx is not None else col_vinc,
+                        })
+            except Exception as _ex_vinc:
+                st.warning(f"⚠️ Error comparando fecha de vinculación fila {fila_base_hts+i} en {nombre_archivo}: {_ex_vinc}")
 
         # Formato de Fecha Diagnóstico (si celda tiene valor)
         tiene_valor = not (pd.isna(fecha_diag) or str(fecha_diag).strip() == "")
@@ -1919,6 +1965,7 @@ if procesar:
     errores_txpvls = []
     errores_cd4 = []
     errores_tarv_gt = []
+    errores_vinc_gt_diag = []
     errores_formato_fecha_diag = []
     errores_currq = []
     errores_iddup = []
@@ -1945,7 +1992,7 @@ if procesar:
             procesar_tx_pvls_y_curr(xl, pais_inf, mes_inf, nombre_archivo, errores_numerador, errores_txpvls)
             procesar_hts_tst(xl, pais_inf, mes_inf, nombre_archivo,
                              errores_cd4, errores_formato_fecha_diag, errores_iddup,
-                             errores_sexo, errores_tarv_gt, errores_pobfem, errores_aledano)
+                             errores_sexo, errores_tarv_gt, errores_vinc_gt_diag, errores_pobfem, errores_aledano)
             procesar_tx_ml_cita(xl, pais_inf, mes_inf, nombre_archivo, errores_txml_cita)  # TX_ML
             procesar_tx_curr_cuadros(xl, pais_inf, mes_inf, nombre_archivo, errores_currq)
             extraer_stage_txcurr_cohorte(xl, pais_inf, mes_inf, nombre_archivo, ruta_rel, stage_curr, stage_new, stage_rtt, stage_ml)
@@ -1957,6 +2004,7 @@ if procesar:
     st.session_state.df_txpv     = pd.DataFrame(errores_txpvls)
     st.session_state.df_cd4      = pd.DataFrame(errores_cd4)
     st.session_state.df_tarv_gt  = pd.DataFrame(errores_tarv_gt)
+    st.session_state.df_vinc_gt_diag = pd.DataFrame(errores_vinc_gt_diag)
     st.session_state.df_fdiag    = pd.DataFrame(errores_formato_fecha_diag)
     st.session_state.df_currq    = pd.DataFrame(errores_currq)
     st.session_state.df_iddup    = pd.DataFrame(errores_iddup)
@@ -2024,7 +2072,7 @@ if not st.session_state.processed:
     st.stop()
 
 # Asegurar columnas base
-for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_aledano","df_txml_cita","df_txcurr_cohorte","df_txcurr_auditoria"]:
+for dfname in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_vinc_gt_diag","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_aledano","df_txml_cita","df_txcurr_cohorte","df_txcurr_auditoria"]:
     df = st.session_state[dfname]
     if not isinstance(df, pd.DataFrame):
         st.session_state[dfname] = pd.DataFrame()
@@ -2039,6 +2087,7 @@ df_all = pd.concat(
     [df for df in [
         st.session_state.df_num, st.session_state.df_txpv, st.session_state.df_cd4,
         st.session_state.df_tarv_gt, st.session_state.df_fdiag,
+        st.session_state.df_vinc_gt_diag,
         st.session_state.df_currq, st.session_state.df_iddup, st.session_state.df_sexo,
         st.session_state.df_pobfem,
         st.session_state.df_aledano,
@@ -2047,7 +2096,7 @@ df_all = pd.concat(
     ignore_index=True
 ) if any([
     isinstance(st.session_state[k], pd.DataFrame) and not st.session_state[k].empty
-    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_aledano","df_txml_cita","df_txcurr_cohorte"]
+    for k in ["df_num","df_txpv","df_cd4","df_tarv_gt","df_vinc_gt_diag","df_fdiag","df_currq","df_iddup","df_sexo","df_pobfem","df_aledano","df_txml_cita","df_txcurr_cohorte"]
 ]) else pd.DataFrame(columns=["País","Departamento","Sitio","Mes de reporte"])
 
 for c in ["País","Departamento","Sitio","Mes de reporte"]:
@@ -2106,6 +2155,7 @@ df_num_f      = _aplicar_filtro(st.session_state.df_num)
 df_txpv_f     = _aplicar_filtro(st.session_state.df_txpv)
 df_cd4_f      = _aplicar_filtro(st.session_state.df_cd4)
 df_tarv_gt_f  = _aplicar_filtro(st.session_state.df_tarv_gt)
+df_vinc_gt_diag_f = _aplicar_filtro(st.session_state.df_vinc_gt_diag)
 df_fdiag_f    = _aplicar_filtro(st.session_state.df_fdiag)
 df_currq_f    = _aplicar_filtro(st.session_state.df_currq)
 df_iddup_f    = _aplicar_filtro(st.session_state.df_iddup)
@@ -2163,6 +2213,7 @@ with res:
         ("TX_PVLS (Den) > TX_CURR",         len(df_txpv_f)),
         ("CD4 vacío positivo",              len(df_cd4_f)),
         ("Fecha inicio TARV < Diagnóstico", len(df_tarv_gt_f)),
+        ("Fecha vinculación < Diagnóstico", len(df_vinc_gt_diag_f)),
         ("Fecha diag. mal formateada",      len(df_fdiag_f)),
         ("TX_CURR ≠ Dispensación_TARV",     len(df_currq_f)),
         ("ID duplicado - filas detectadas", len(df_iddup_f)),
@@ -2199,7 +2250,7 @@ sel = st.container(border=True)
 with sel:
     _section_head("Porcentaje de error por indicador", "Errores ÷ chequeos realizados")
     cards = [IND_NUM_GT_DEN, IND_DEN_GT_CURR, IND_CD4_MISSING,
-             IND_TARV_GT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO,
+             IND_TARV_GT_DIAG, IND_VINC_GT_DIAG, IND_DIAG_BAD_FMT, IND_CURR_Q1Q2_DIFF, IND_ID_DUPLICADO,
              IND_SEXO_INVALID, IND_TXML_CITA_VACIA, IND_TXCURR_COHORTE,
              IND_POB_FEM_RIESGO]  # TX_ML + Conciliación + Población riesgo Femenino
     cards.append(IND_SITIO_ALEDANO)  # Sitio aledaño sin nombre
@@ -2239,6 +2290,7 @@ with det:
         ("TX_PVLS (Den) > TX_CURR",       df_txpv_f,  "— Sin casos Denominador > TX_CURR —"),
         ("CD4 vacío positivo",            df_cd4_f,   "— Sin positivos con CD4 vacío —"),
         ("Fecha inicio TARV < Fecha diagnóstico", df_tarv_gt_f, "— Sin casos Fecha inicio TARV anterior al diagnóstico —"),
+        ("Fecha vinculación < Fecha diagnóstico", df_vinc_gt_diag_f, "— Sin casos de vinculación anterior al diagnóstico —"),
         ("Formato fecha diagnóstico",     df_fdiag_f, "— Sin problemas de formato de fecha —"),
         ("TX_CURR ≠ Dispensación_TARV",   df_currq_f, "— TX_CURR = Dispensación_TARV en la selección —"),
         ("ID (expediente) duplicado",     df_iddup_f, "— Sin IDs (expediente) duplicados —"),
@@ -2395,6 +2447,7 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
         "Denominador > TX_CURR": "Denominador (PVLS)",
         "CD4 vacío positivo": ["CD4 Basal", "Motivo de no CD4"],
         "Fecha TARV < Diagnóstico (HTS)": ["Fecha diagnóstico", "Fecha inicio TARV"],
+        "Fecha vinculación < Diagnóstico": ["Fecha diagnóstico", "Fecha de vinculación"],
         "Formato fecha diagnóstico": "Fecha del diagnóstico de la prueba",
         "TX_CURR ≠ Dispensación_TARV": "Diferencia (TX_CURR - Disp_TARV)",
         "ID (expediente) duplicado": "ID expediente",
@@ -2459,6 +2512,7 @@ full_dict = {
     "Denominador > TX_CURR": st.session_state.df_txpv,
     "CD4 vacío positivo": st.session_state.df_cd4,
     "Fecha TARV < Diagnóstico (HTS)": st.session_state.df_tarv_gt,
+    "Fecha vinculación < Diagnóstico": st.session_state.df_vinc_gt_diag,
     "Formato fecha diagnóstico": st.session_state.df_fdiag,
     "TX_CURR ≠ Dispensación_TARV": st.session_state.df_currq,
     "ID (expediente) duplicado": st.session_state.df_iddup,
@@ -2502,6 +2556,7 @@ filt_dict = {
     "Denominador > TX_CURR": df_txpv_f,
     "CD4 vacío positivo": df_cd4_f,
     "Fecha TARV < Diagnóstico (HTS)": df_tarv_gt_f,
+    "Fecha vinculación < Diagnóstico": df_vinc_gt_diag_f,
     "Formato fecha diagnóstico": df_fdiag_f,
     "TX_CURR ≠ Dispensación_TARV": df_currq_f,
     "ID (expediente) duplicado": df_iddup_f,
@@ -2537,7 +2592,3 @@ with dl:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
-
-
-
-
