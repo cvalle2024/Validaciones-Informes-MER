@@ -2266,6 +2266,7 @@ if procesar:
     # Auditoría de todas las tablas estructuradas y hojas, ANTES de las reglas MER.
     # Cuando no hay plantilla elegida, se compara con el consenso del lote.
     ref_path = None
+    entradas_patron = []
     if modo_referencia == "Seleccionar un archivo de referencia":
         if patron_subido is not None:
             ref_path = "__PATRON_VERIFICADO__.xlsx"
@@ -2507,6 +2508,20 @@ df_aledano_f  = _aplicar_filtro(st.session_state.df_aledano)
 df_txml_cita_f = _aplicar_filtro(st.session_state.df_txml_cita)  # TX_ML
 df_txcurr_cohorte_f = _aplicar_filtro(st.session_state.df_txcurr_cohorte)  # Conciliación TX_CURR
 df_txcurr_auditoria_f = _aplicar_filtro(st.session_state.df_txcurr_auditoria)  # Auditoría TX_CURR
+# Auditoría Excel: ámbito de archivo, independiente de los filtros clínicos de país/sitio.
+df_tablas_excel_f = st.session_state.df_estructura_tablas.copy()
+if not df_tablas_excel_f.empty:
+    df_tablas_hallazgos_f = df_tablas_excel_f.loc[
+        ~df_tablas_excel_f["Estado"].isin(["CORRECTO", "SIN PATRÓN"])
+    ].copy()
+    _tablas_chequeos = len(df_tablas_excel_f.loc[
+        df_tablas_excel_f["Estado"] != "SIN PATRÓN"
+    ])
+else:
+    df_tablas_hallazgos_f = pd.DataFrame()
+    _tablas_chequeos = 0
+_tablas_errores = len(df_tablas_hallazgos_f)
+
 
 # Métricas (adaptadas a la selección)
 def _build_metrics_df_from_selection(sel_pais, sel_depto, sel_sitio):
@@ -2564,7 +2579,9 @@ with res:
         ("Conciliación TX_CURR trimestral", len(df_txcurr_cohorte_f)),
         ("Población de riesgo en Femenino", len(df_pobfem_f)),
         ("Sitio aledaño sin nombre",        len(df_aledano_f)),
+        ("Nombres de tablas Excel",          _tablas_errores),
     ]
+    # Las diferencias estructurales son por archivo, no se filtran por selecciones clínicas.
     _total_hallazgos = sum(n for _, n in _resumen_items)
     _ind_afectados   = sum(1 for _, n in _resumen_items if n > 0)
     _total_ind       = len(_resumen_items)
@@ -2602,6 +2619,8 @@ with sel:
         name = DISPLAY_NAMES[key]
         v = sel_map.get(name, {"Errores": 0, "Chequeos": 0, "% Error": 0})
         _pct_cards += _pct_card(name, v.get("% Error", 0), v.get("Errores", 0), v.get("Chequeos", 0))
+    _pct_tablas = (100.0 * _tablas_errores / _tablas_chequeos) if _tablas_chequeos else 0
+    _pct_cards += _pct_card("Nombres de tablas Excel", _pct_tablas, _tablas_errores, _tablas_chequeos)
     st.markdown(f'<div class="vh-grid">{_pct_cards}</div>', unsafe_allow_html=True)
 
 # 4) Detalle por indicador
@@ -2642,6 +2661,7 @@ with det:
         ("TX_ML: Última cita esperada vacía", df_txml_cita_f, "— Sin filas con 'Última cita esperada' vacía —"),  # TX_ML
         ("Conciliación TX_CURR trimestral", df_txcurr_cohorte_f, "— Sin diferencias en la conciliación trimestral TX_CURR —"),
         ("Auditoría Sitio TX_CURR", df_txcurr_auditoria_f, "— Sin filas de auditoría TX_CURR —"),
+        ("Nombres de tablas Excel", df_tablas_hallazgos_f, "— Sin diferencias de nombres respecto al patrón —"),
     ]
 
     tabs = st.tabs([title for title, _, _ in tab_specs])
