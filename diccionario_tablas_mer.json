@@ -1,0 +1,57 @@
+{
+  "version": "V6",
+  "origen": "FORMATO EN BLANCO PARA REPORTE MER 01102026.xlsx",
+  "tablas_por_hoja": {
+    "HTS_TST": [
+      "HTS_TS"
+    ],
+    "HTS_SELF": [
+      "HTS_SELF"
+    ],
+    "TX_NEW": [
+      "TX_NEW"
+    ],
+    "TX_ML": [
+      "TX_ML"
+    ],
+    "TX_RTT": [
+      "TX_RTT"
+    ],
+    "TX_CURR": [
+      "Dispensación_TARV",
+      "TX_CURR"
+    ],
+    "TX_PVLS": [
+      "TX_PVLS_DENOMINADOR",
+      "TX_PVLS_NUMERADOR"
+    ],
+    "TX_TB": [
+      "TX_TB"
+    ],
+    "PrEP_New": [
+      "PrEP_New"
+    ],
+    "TB_PREV": [
+      "TB_PREV"
+    ],
+    "Indicadores de cascada": [
+      "CASCADA_CV",
+      "CASCADA_DE_CV_ALTA"
+    ],
+    "CXCA_SCRN_TX": [
+      "CXCA_SCRN_TX"
+    ],
+    "GEND_GBV": [
+      "GEND_GBV"
+    ],
+    "BBDD FALLECIDOS": [
+      "BBDD_FALLECIDOS"
+    ],
+    "SOSPECHA FALLOS VIROLOGICOS": [
+      "FALLOS_VIROLOGICOS"
+    ],
+    "BBDD_IOS": [
+      "BDD_IOS"
+    ]
+  }
+}
