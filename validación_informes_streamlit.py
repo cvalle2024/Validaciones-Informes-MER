@@ -30,7 +30,7 @@ with c_logo:
     st.image(logo_img, width=180)
 with c_title:
     st.title("✅ Portal de validación de indicadores MER (VIHCA)")
-    st.caption("VERSIÓN 4 · 14 validaciones · Auditoría de nombres de tablas Excel integrada")
+    st.caption("VERSIÓN 5 · 14 validaciones · Solo tablas MER con nombres; Tabla1/Tabla2 ignoradas")
 
 # ============================
 # ----- TEMA / ESTILOS UI ----
@@ -448,7 +448,7 @@ modo_referencia = st.radio(
     "Patrón de nombres de tablas Excel",
     ["Consenso entre archivos", "Seleccionar un archivo de referencia"],
     horizontal=True,
-    help="El consenso identifica diferencias respecto al nombre mayoritario; "
+    help="El consenso usa nombres descriptivos sin dígitos y descarta tablas genéricas; "
          "un archivo de referencia permite comparar con una plantilla verificada."
 )
 patron_subido = None
@@ -457,7 +457,7 @@ if modo_referencia == "Seleccionar un archivo de referencia":
         "Plantilla Excel verificada (.xlsx), patrón de nombres internos de las tablas",
         type=["xlsx"], key="plantilla_tablas_referencia"
     )
-st.success("✅ V4 ACTIVA — Incluye **Nombres de tablas Excel** como validación número 14 del panel principal. También puedes ejecutarla por separado con el botón inferior.")
+st.success("✅ V5 ACTIVA — Auditoría exclusiva de **tablas de indicadores con nombres descriptivos**, sin números añadidos. Se ignoran Tabla1, Tabla2 y similares.")
 col_validar, col_procesar = st.columns(2)
 with col_validar:
     validar_estructura = st.button("🔎 VALIDAR NOMBRES DE TABLAS", type="primary", use_container_width=True)
@@ -528,7 +528,7 @@ if validar_estructura:
     elif modo_referencia == "Seleccionar un archivo de referencia":
         st.warning("No has cargado la plantilla de referencia. Se usará consenso entre archivos.")
 
-    with st.spinner("Revisando nombres internos de tablas y hojas de Excel..."):
+    with st.spinner("Revisando únicamente nombres de tablas estructuradas MER..."):
         df_aud, df_pat = auditar_tablas_excel(entradas_estructura, referencia_estructura)
     if referencia_estructura is not None:
         df_aud = df_aud.loc[df_aud["Ruta"] != referencia_estructura].copy()
@@ -542,7 +542,7 @@ if validar_estructura:
     if len(entradas_estructura) == 1 and referencia_estructura is None:
         st.warning("Con un solo archivo no se puede conocer el nombre oficial por consenso. Usa 'Seleccionar un archivo de referencia'.")
     if not inconsistencias.empty:
-        st.error("Se detectaron diferencias de nombres de tabla/hoja o archivos que no se pudieron leer.")
+        st.error("Se detectaron nombres de indicadores diferentes, tablas faltantes o archivos ilegibles.")
         st.dataframe(inconsistencias, use_container_width=True, hide_index=True)
     else:
         st.success("No se encontraron diferencias respecto al patrón disponible.")
@@ -2401,7 +2401,7 @@ if not df_estructura.empty:
     a1.metric("Archivos revisados", df_estructura["Ruta"].nunique())
     a2.metric("Diferencias detectadas", len(hallazgos))
     a3.metric("Archivos con diferencias", hallazgos["Ruta"].nunique())
-    st.caption("Se comparan nombres exactos de tablas estructuradas, no solo nombres de hojas. "
+    st.caption("Se comparan nombres exactos de tablas MER. Tabla1, Tabla2 y similares no se auditan. "
                "El consenso no garantiza que el nombre mayoritario sea el oficial; "
                "para validar contra el formato oficial, carga una plantilla de referencia verificada.")
     if not hallazgos.empty:
@@ -2516,7 +2516,7 @@ if not df_tablas_excel_f.empty:
         ~df_tablas_excel_f["Estado"].isin(["CORRECTO", "SIN PATRÓN"])
     ].copy()
     _tablas_chequeos = len(df_tablas_excel_f.loc[
-        df_tablas_excel_f["Estado"] != "SIN PATRÓN"
+        ~df_tablas_excel_f["Estado"].isin(["SIN PATRÓN", "ERROR LECTURA"])
     ])
 else:
     df_tablas_hallazgos_f = pd.DataFrame()
@@ -2603,7 +2603,7 @@ with res:
         '</div>'
     )
     st.markdown(_hero, unsafe_allow_html=True)
-    st.caption("Panel V4: 13 verificaciones MER + 1 auditoría estructural Excel (14 controles).")
+    st.caption("Panel V5: 13 verificaciones MER + 1 auditoría de nombres de tablas de indicadores (14 controles).")
     _cards = "".join(_count_card(lbl, n) for lbl, n in _resumen_items)
     st.markdown(f'<div class="vh-grid">{_cards}</div>', unsafe_allow_html=True)
 
