@@ -30,6 +30,7 @@ with c_logo:
     st.image(logo_img, width=180)
 with c_title:
     st.title("✅ Portal de validación de indicadores MER (VIHCA)")
+    st.caption("VERSIÓN 4 · 14 validaciones · Auditoría de nombres de tablas Excel integrada")
 
 # ============================
 # ----- TEMA / ESTILOS UI ----
@@ -456,7 +457,7 @@ if modo_referencia == "Seleccionar un archivo de referencia":
         "Plantilla Excel verificada (.xlsx), patrón de nombres internos de las tablas",
         type=["xlsx"], key="plantilla_tablas_referencia"
     )
-st.info("🆕 **Validación independiente: Nombres de tablas Excel**. Puedes ejecutarla sin procesar los demás indicadores MER.")
+st.success("✅ V4 ACTIVA — Incluye **Nombres de tablas Excel** como validación número 14 del panel principal. También puedes ejecutarla por separado con el botón inferior.")
 col_validar, col_procesar = st.columns(2)
 with col_validar:
     validar_estructura = st.button("🔎 VALIDAR NOMBRES DE TABLAS", type="primary", use_container_width=True)
@@ -2585,6 +2586,7 @@ with res:
     _total_hallazgos = sum(n for _, n in _resumen_items)
     _ind_afectados   = sum(1 for _, n in _resumen_items if n > 0)
     _total_ind       = len(_resumen_items)
+    assert _total_ind == 14, "La tarjeta de tablas Excel no está incluida en el resumen"
     _ctx_sel = " · ".join([
         st.session_state.sel_pais if st.session_state.sel_pais != "Todos" else "Todos los países",
         st.session_state.sel_depto if st.session_state.sel_depto != "Todos" else "Todos los deptos.",
@@ -2601,6 +2603,7 @@ with res:
         '</div>'
     )
     st.markdown(_hero, unsafe_allow_html=True)
+    st.caption("Panel V4: 13 verificaciones MER + 1 auditoría estructural Excel (14 controles).")
     _cards = "".join(_count_card(lbl, n) for lbl, n in _resumen_items)
     st.markdown(f'<div class="vh-grid">{_cards}</div>', unsafe_allow_html=True)
 
