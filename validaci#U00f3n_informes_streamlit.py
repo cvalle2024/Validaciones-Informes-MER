@@ -456,7 +456,12 @@ if modo_referencia == "Seleccionar un archivo de referencia":
         "Plantilla Excel verificada (.xlsx), patrón de nombres internos de las tablas",
         type=["xlsx"], key="plantilla_tablas_referencia"
     )
-procesar = st.button("▶️ Procesar", use_container_width=True)
+st.info("🆕 **Validación independiente: Nombres de tablas Excel**. Puedes ejecutarla sin procesar los demás indicadores MER.")
+col_validar, col_procesar = st.columns(2)
+with col_validar:
+    validar_estructura = st.button("🔎 VALIDAR NOMBRES DE TABLAS", type="primary", use_container_width=True)
+with col_procesar:
+    procesar = st.button("▶️ Procesar validaciones MER", use_container_width=True)
 
 # ============================
 # ---- ESTADO (CACHE/STORE) --
@@ -486,6 +491,75 @@ for key, val in {
     "metrics_by_pds": defaultdict(lambda: {"errors": 0, "checks": 0}),
 }.items():
     _ss_default(key, val)
+
+# =============================================================
+# VALIDACIÓN ESTRUCTURAL INDEPENDIENTE (sin procesar reglas MER)
+# Permite ver la auditoría aun si otra validación da error.
+# =============================================================
+if validar_estructura:
+    if not subida_multiple:
+        st.warning("Sube uno o varios archivos .xlsx o un ZIP antes de validar.")
+        st.stop()
+    entradas_estructura = []
+    for archivo_subido in subida_multiple:
+        nombre_archivo = archivo_subido.name
+        datos_archivo = archivo_subido.getvalue()
+        if nombre_archivo.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(datos_archivo)) as archivo_zip:
+                    for info_zip in archivo_zip.infolist():
+                        if (not info_zip.is_dir() and info_zip.filename.lower().endswith(".xlsx")
+                            and not os.path.basename(info_zip.filename).startswith("~$")):
+                            entradas_estructura.append((os.path.basename(info_zip.filename), archivo_zip.read(info_zip.filename), info_zip.filename))
+            except Exception as exc:
+                st.error("ZIP ilegible: " + nombre_archivo + ": " + str(exc))
+        elif nombre_archivo.lower().endswith(".xlsx") and not nombre_archivo.startswith("~$"):
+            entradas_estructura.append((nombre_archivo, datos_archivo, nombre_archivo))
+
+    if not entradas_estructura:
+        st.error("No se encontraron archivos Excel .xlsx para revisar.")
+        st.stop()
+
+    referencia_estructura = None
+    if modo_referencia == "Seleccionar un archivo de referencia" and patron_subido is not None:
+        referencia_estructura = "__REFERENCIA_VALIDADA__.xlsx"
+        entradas_estructura.append((patron_subido.name, patron_subido.getvalue(), referencia_estructura))
+    elif modo_referencia == "Seleccionar un archivo de referencia":
+        st.warning("No has cargado la plantilla de referencia. Se usará consenso entre archivos.")
+
+    with st.spinner("Revisando nombres internos de tablas y hojas de Excel..."):
+        df_aud, df_pat = auditar_tablas_excel(entradas_estructura, referencia_estructura)
+    if referencia_estructura is not None:
+        df_aud = df_aud.loc[df_aud["Ruta"] != referencia_estructura].copy()
+
+    st.markdown("## 🔎 Resultado: Validación de nombres de tablas Excel")
+    inconsistencias = df_aud.loc[~df_aud["Estado"].isin(["CORRECTO", "SIN PATRÓN"])].copy()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Archivos analizados", df_aud["Ruta"].nunique())
+    c2.metric("Diferencias y errores", len(inconsistencias))
+    c3.metric("Archivos observados", inconsistencias["Ruta"].nunique())
+    if len(entradas_estructura) == 1 and referencia_estructura is None:
+        st.warning("Con un solo archivo no se puede conocer el nombre oficial por consenso. Usa 'Seleccionar un archivo de referencia'.")
+    if not inconsistencias.empty:
+        st.error("Se detectaron diferencias de nombres de tabla/hoja o archivos que no se pudieron leer.")
+        st.dataframe(inconsistencias, use_container_width=True, hide_index=True)
+    else:
+        st.success("No se encontraron diferencias respecto al patrón disponible.")
+    with st.expander("Inventario completo de hojas y tablas revisadas"):
+        st.dataframe(df_aud, use_container_width=True, hide_index=True)
+    with st.expander("Nombres de referencia utilizados"):
+        st.dataframe(df_pat, use_container_width=True, hide_index=True)
+
+    salida_estructura = io.BytesIO()
+    with pd.ExcelWriter(salida_estructura, engine="xlsxwriter") as escritor:
+        inconsistencias.to_excel(escritor, sheet_name="Diferencias_Tablas", index=False)
+        df_aud.to_excel(escritor, sheet_name="Inventario_Completo", index=False)
+        df_pat.to_excel(escritor, sheet_name="Patron_Referencia", index=False)
+    st.download_button("⬇️ Descargar auditoría de tablas (Excel)",
+        data=salida_estructura.getvalue(), file_name="Auditoria_Nombres_Tablas_MER.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.caption("Esta validación es independiente: para ejecutar las demás reglas MER usa el botón Procesar validaciones MER.")
+    st.stop()
 
 _ss_default("sel_pais", "Todos")
 _ss_default("sel_depto", "Todos")
