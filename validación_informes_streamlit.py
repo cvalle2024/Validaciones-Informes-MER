@@ -17,6 +17,7 @@ from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 from pathlib import Path
 from auditoria_tablas import auditar_tablas_excel
+from auditoria_sitios import auditar_sitios_excel
 
 # ============================
 # --------- CONFIG UI --------
@@ -29,8 +30,8 @@ c_logo, c_title = st.columns([1, 11])
 with c_logo:
     st.image(logo_img, width=180)
 with c_title:
-    st.title("✅ Portal de validación de indicadores MER (VIHCA)")
-    st.caption("VERSIÓN 5 · 14 validaciones · Solo tablas MER con nombres; Tabla1/Tabla2 ignoradas")
+    st.title("Centro de Calidad de Datos MER")
+    st.caption("VIHCA  ·  V7  |  Integridad de indicadores, estructura Excel y catálogo oficial de sitios")
 
 # ============================
 # ----- TEMA / ESTILOS UI ----
@@ -448,6 +449,9 @@ with col_u2:
 modo_referencia = "Diccionario oficial integrado"
 patron_subido = None
 st.success("✅ V6 ACTIVA — Diccionario oficial de tablas MER integrado. No requiere formato base.")
+st.markdown("---")
+st.markdown("#### Centro de verificaciones")
+st.caption("Auditorías estructurales independientes o procesamiento integral de indicadores MER")
 col_validar, col_procesar = st.columns(2)
 with col_validar:
     validar_estructura = st.button("🔎 VALIDAR NOMBRES DE TABLAS", type="primary", use_container_width=True)
@@ -463,6 +467,7 @@ def _ss_default(key, val):
 for key, val in {
     "processed": False,
     "df_estructura_tablas": pd.DataFrame(),
+    "df_sitios_oficiales": pd.DataFrame(),
     "df_patron_tablas": pd.DataFrame(),
     "df_num": pd.DataFrame(),      # Numerador > Denominador
     "df_txpv": pd.DataFrame(),     # Denominador > TX_CURR
@@ -514,6 +519,8 @@ if validar_estructura:
     referencia_estructura = None
     with st.spinner("Revisando únicamente nombres de tablas estructuradas MER..."):
         df_aud, df_pat = auditar_tablas_excel(entradas_estructura)
+        df_sit = auditar_sitios_excel(entradas_estructura)
+        st.session_state.df_sitios_oficiales = df_sit
     if referencia_estructura is not None:
         df_aud = df_aud.loc[df_aud["Ruta"] != referencia_estructura].copy()
 
@@ -542,7 +549,25 @@ if validar_estructura:
     st.download_button("⬇️ Descargar auditoría de tablas (Excel)",
         data=salida_estructura.getvalue(), file_name="Auditoria_Nombres_Tablas_MER.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-    st.caption("Esta validación es independiente: para ejecutar las demás reglas MER usa el botón Procesar validaciones MER.")
+    st.markdown("### 📍 Validación de nombres oficiales de sitios")
+    hallazgos_sit = df_sit.loc[df_sit["Estado"] != "CORRECTO"].copy()
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Sitios distintos revisados por hoja", len(df_sit))
+    s2.metric("Nombres no coincidentes", len(hallazgos_sit))
+    s3.metric("Archivos con diferencias", hallazgos_sit["Ruta"].nunique())
+    if not hallazgos_sit.empty:
+        st.error("Hay nombres de sitios que no coinciden exactamente con METAS_SITIOS.")
+        st.dataframe(hallazgos_sit, hide_index=True, use_container_width=True)
+    else:
+        st.success("Sin diferencias de nombres de sitios en las hojas examinadas.")
+    with st.expander("Inventario completo de sitios por hoja"):
+        st.dataframe(df_sit, use_container_width=True, hide_index=True)
+    libro_sit = io.BytesIO()
+    with pd.ExcelWriter(libro_sit, engine="xlsxwriter") as writer:
+        hallazgos_sit.to_excel(writer, sheet_name="Sitios_Diferentes", index=False)
+        df_sit.to_excel(writer, sheet_name="Inventario_Sitios", index=False)
+    st.download_button("⬇️ Descargar auditoría de sitios oficiales", libro_sit.getvalue(), file_name="Auditoria_Sitios_MER.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.caption("Las diferencias incluyen espacios, tildes, signos o denominaciones distintas; no se modifican archivos originales.")
     st.stop()
 
 _ss_default("sel_pais", "Todos")
@@ -2250,6 +2275,7 @@ if procesar:
     # Auditoría MER contra el diccionario oficial integrado, sin plantilla externa.
     ref_path = None
     st.session_state.df_estructura_tablas, st.session_state.df_patron_tablas = auditar_tablas_excel(entradas)
+    st.session_state.df_sitios_oficiales = auditar_sitios_excel(entradas)
 
     if ref_path is not None:
         st.session_state.df_estructura_tablas = st.session_state.df_estructura_tablas.loc[
@@ -2364,6 +2390,22 @@ if procesar:
 if not st.session_state.processed:
     st.info("Carga tus archivos y pulsa **Procesar**.")
     st.stop()
+
+# Auditoría independiente de nombres oficiales de sitios.
+st.markdown("### 📍 Auditoría de sitios oficiales")
+df_sitios = st.session_state.df_sitios_oficiales
+if not df_sitios.empty:
+    df_sitios_hallazgos = df_sitios.loc[df_sitios["Estado"] != "CORRECTO"].copy()
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Nombres examinados", len(df_sitios))
+    s2.metric("Diferencias de nombres", len(df_sitios_hallazgos))
+    s3.metric("Archivos con diferencias", df_sitios_hallazgos["Ruta"].nunique())
+    if not df_sitios_hallazgos.empty:
+        st.dataframe(df_sitios_hallazgos, use_container_width=True, hide_index=True)
+    else:
+        st.success("Todos los nombres examinados coinciden exactamente con el catálogo de METAS_SITIOS.")
+    with st.expander("Ver todos los nombres revisados"):
+        st.dataframe(df_sitios, use_container_width=True, hide_index=True)
 
 # Auditoría estructural independiente de validaciones clínicas.
 st.markdown("### 📋 Auditoría de nombres de tablas Excel")
@@ -2493,6 +2535,7 @@ else:
     df_tablas_hallazgos_f = pd.DataFrame()
     _tablas_chequeos = 0
 _tablas_errores = len(df_tablas_hallazgos_f)
+_sitios_errores = len(st.session_state.df_sitios_oficiales.loc[st.session_state.df_sitios_oficiales["Estado"] != "CORRECTO"]) if not st.session_state.df_sitios_oficiales.empty else 0
 
 
 # Métricas (adaptadas a la selección)
@@ -2552,12 +2595,13 @@ with res:
         ("Población de riesgo en Femenino", len(df_pobfem_f)),
         ("Sitio aledaño sin nombre",        len(df_aledano_f)),
         ("Nombres de tablas Excel",          _tablas_errores),
+        ("Nombres oficiales de sitios", _sitios_errores),
     ]
     # Las diferencias estructurales son por archivo, no se filtran por selecciones clínicas.
     _total_hallazgos = sum(n for _, n in _resumen_items)
     _ind_afectados   = sum(1 for _, n in _resumen_items if n > 0)
     _total_ind       = len(_resumen_items)
-    assert _total_ind == 14, "La tarjeta de tablas Excel no está incluida en el resumen"
+    assert _total_ind == 15, "Falta un control estructural en el resumen"
     _ctx_sel = " · ".join([
         st.session_state.sel_pais if st.session_state.sel_pais != "Todos" else "Todos los países",
         st.session_state.sel_depto if st.session_state.sel_depto != "Todos" else "Todos los deptos.",
@@ -2574,7 +2618,7 @@ with res:
         '</div>'
     )
     st.markdown(_hero, unsafe_allow_html=True)
-    st.caption("Panel V6: 13 verificaciones MER + 1 auditoría de nombres de tablas de indicadores (14 controles).")
+    st.caption("Panel V7: 13 reglas MER + nombres oficiales de tablas + nombres oficiales de sitios (15 controles).")
     _cards = "".join(_count_card(lbl, n) for lbl, n in _resumen_items)
     st.markdown(f'<div class="vh-grid">{_cards}</div>', unsafe_allow_html=True)
 
@@ -2595,6 +2639,9 @@ with sel:
         _pct_cards += _pct_card(name, v.get("% Error", 0), v.get("Errores", 0), v.get("Chequeos", 0))
     _pct_tablas = (100.0 * _tablas_errores / _tablas_chequeos) if _tablas_chequeos else 0
     _pct_cards += _pct_card("Nombres de tablas Excel", _pct_tablas, _tablas_errores, _tablas_chequeos)
+    _sitios_chequeos = len(st.session_state.df_sitios_oficiales)
+    _pct_sitios = 100.0 * _sitios_errores / _sitios_chequeos if _sitios_chequeos else 0.0
+    _pct_cards += _pct_card("Nombres oficiales de sitios", _pct_sitios, _sitios_errores, _sitios_chequeos)
     st.markdown(f'<div class="vh-grid">{_pct_cards}</div>', unsafe_allow_html=True)
 
 # 4) Detalle por indicador
@@ -2636,6 +2683,7 @@ with det:
         ("Conciliación TX_CURR trimestral", df_txcurr_cohorte_f, "— Sin diferencias en la conciliación trimestral TX_CURR —"),
         ("Auditoría Sitio TX_CURR", df_txcurr_auditoria_f, "— Sin filas de auditoría TX_CURR —"),
         ("Nombres de tablas Excel", df_tablas_hallazgos_f, "— Sin diferencias de nombres respecto al patrón —"),
+        ("Nombres oficiales de sitios", st.session_state.df_sitios_oficiales.loc[st.session_state.df_sitios_oficiales["Estado"] != "CORRECTO"] if not st.session_state.df_sitios_oficiales.empty else pd.DataFrame(), "— Sin diferencias en nombres oficiales —"),
     ]
 
     tabs = st.tabs([title for title, _, _ in tab_specs])
@@ -2848,6 +2896,7 @@ df_txcurr_cohorte_export_all = _clean_txcurr_export_df(st.session_state.df_txcur
 df_txcurr_auditoria_export_all = _clean_txcurr_export_df(st.session_state.df_txcurr_auditoria)
 
 full_dict = {
+    "Nombres oficiales sitios": st.session_state.df_sitios_oficiales.loc[st.session_state.df_sitios_oficiales["Estado"] != "CORRECTO"] if not st.session_state.df_sitios_oficiales.empty else pd.DataFrame(),
     "Nombres tablas Excel": st.session_state.df_estructura_tablas.loc[
         ~st.session_state.df_estructura_tablas["Estado"].isin(["CORRECTO", "SIN PATRÓN"])
     ] if not st.session_state.df_estructura_tablas.empty else pd.DataFrame(),
@@ -2895,6 +2944,7 @@ df_txcurr_cohorte_export_f = _clean_txcurr_export_df(df_txcurr_cohorte_f)
 df_txcurr_auditoria_export_f = _clean_txcurr_export_df(df_txcurr_auditoria_f)
 
 filt_dict = {
+    "Nombres oficiales sitios": st.session_state.df_sitios_oficiales.loc[st.session_state.df_sitios_oficiales["Estado"] != "CORRECTO"] if not st.session_state.df_sitios_oficiales.empty else pd.DataFrame(),
     "Nombres tablas Excel": st.session_state.df_estructura_tablas.loc[
         ~st.session_state.df_estructura_tablas["Estado"].isin(["CORRECTO", "SIN PATRÓN"])
     ] if not st.session_state.df_estructura_tablas.empty else pd.DataFrame(),
