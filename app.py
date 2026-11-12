@@ -32,7 +32,12 @@ with c_logo:
     st.image(logo_img, width=180)
 with c_title:
     st.title("Centro de Calidad de Datos MER")
-    st.caption("VIHCA  ·  V7  |  Integridad de indicadores, estructura Excel y catálogo oficial de sitios")
+    st.caption("VIHCA  ·  V8  |  Validaciones, historial de errores y resumen trimestral")
+
+# Acceso visible desde el inicio: el historial detallado aparece al final del reporte.
+st.info("🆕 V8 · **Historial de errores y seguimiento trimestral** disponible al final de esta página. Procesa archivos para registrar la primera detección y las reincidencias.")
+st.sidebar.success("✅ Versión V8 — Historial activo")
+st.sidebar.caption("Consulta el historial, los resúmenes mensual y trimestral al final de la página principal.")
 
 # ============================
 # ----- TEMA / ESTILOS UI ----

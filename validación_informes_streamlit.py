@@ -18,6 +18,7 @@ from openpyxl.utils import get_column_letter
 from pathlib import Path
 from auditoria_tablas import auditar_tablas_excel
 from auditoria_sitios import auditar_sitios_excel
+from historial_errores import registrar as registrar_historial, tablas as tablas_historial, exportar as exportar_historial, DB_PATH as RUTA_HISTORIAL
 
 # ============================
 # --------- CONFIG UI --------
@@ -31,7 +32,12 @@ with c_logo:
     st.image(logo_img, width=180)
 with c_title:
     st.title("Centro de Calidad de Datos MER")
-    st.caption("VIHCA  ·  V7  |  Integridad de indicadores, estructura Excel y catálogo oficial de sitios")
+    st.caption("VIHCA  ·  V8  |  Validaciones, historial de errores y resumen trimestral")
+
+# Acceso visible desde el inicio: el historial detallado aparece al final del reporte.
+st.info("🆕 V8 · **Historial de errores y seguimiento trimestral** disponible al final de esta página. Procesa archivos para registrar la primera detección y las reincidencias.")
+st.sidebar.success("✅ Versión V8 — Historial activo")
+st.sidebar.caption("Consulta el historial, los resúmenes mensual y trimestral al final de la página principal.")
 
 # ============================
 # ----- TEMA / ESTILOS UI ----
@@ -443,7 +449,7 @@ with col_u1:
     )
 with col_u2:
     default_pais = st.text_input("País por defecto", "Desconocido")
-    default_mes = st.text_input("Mes por defecto ", "Desconocido")
+    default_mes = st.text_input("Mes de reporte por defecto (ej. OCT 2026)", "Desconocido", help="Necesario para asignar mes y trimestre a los errores sin fecha de reporte, incluidos nombres de sitios.")
 
 # Referencia oficial integrada: no solicitar plantilla ni elegir consenso.
 modo_referencia = "Diccionario oficial integrado"
@@ -2381,6 +2387,7 @@ if procesar:
                 cols.insert(insert_pos, "Fecha del diagnóstico")
             st.session_state.df_iddup = st.session_state.df_iddup[cols]
 
+    st.session_state.pendiente_historial = True
     st.session_state.processed = True
     st.success("Procesamiento completado. Ahora puedes filtrar al instante ✅")
 
@@ -2915,6 +2922,56 @@ full_dict = {
     "Conciliación TX_CURR trimestral": df_txcurr_cohorte_export_all,
     "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_export_all,
 }
+
+# Persistir una sola vez por pulsación de Procesar (no por recarga de Streamlit).
+if st.session_state.get("pendiente_historial", False):
+    try:
+        rid, n_registrados = registrar_historial(full_dict, mes_default=default_mes)
+        st.session_state.ultimo_registro_historial = (rid, n_registrados)
+        st.session_state.pendiente_historial = False
+    except Exception as exc:
+        st.error(f"No fue posible guardar el historial: {exc}")
+
+st.markdown("---")
+st.markdown("### 📊 Historial de errores y seguimiento trimestral")
+st.caption("Cada procesamiento guarda hallazgos en SQLite. Las reincidencias se identifican por archivo, sitio, indicador, fila y mes de reporte. No se guardan identificadores de pacientes en texto claro.")
+try:
+    hist, resumen_mes, resumen_trim, runs_hist = tablas_historial()
+    if not hist.empty:
+        paises_hist = sorted(x for x in hist["País"].dropna().unique() if x)
+        trimestres_hist = sorted((x for x in hist["Trimestre"].dropna().unique() if x), reverse=True)
+        hcol1, hcol2 = st.columns(2)
+        with hcol1:
+            filtro_pais_hist = st.selectbox("País · historial", ["Todos"] + paises_hist, key="filtro_pais_hist")
+        with hcol2:
+            filtro_trimestre_hist = st.selectbox("Trimestre fiscal · historial", ["Todos"] + trimestres_hist, key="filtro_trimestre_hist")
+        hv = hist.copy()
+        if filtro_pais_hist != "Todos": hv = hv[hv["País"] == filtro_pais_hist]
+        if filtro_trimestre_hist != "Todos": hv = hv[hv["Trimestre"] == filtro_trimestre_hist]
+        k1,k2,k3,k4 = st.columns(4)
+        k1.metric("Detecciones", len(hv))
+        k2.metric("Errores diferentes", hv["Clave"].nunique())
+        k3.metric("Reincidencias", int((hv["N° detección"] > 1).sum()))
+        k4.metric("Archivos con errores", hv["Archivo"].nunique())
+        ht1, ht2, ht3 = st.tabs(["Historial de hallazgos", "Resumen mensual", "Resumen trimestral FY"])
+        with ht1:
+            visible=hv.drop(columns=["Clave", "Ejecución"])
+            st.dataframe(visible, use_container_width=True, hide_index=True)
+        with ht2:
+            mm = resumen_mes
+            if filtro_pais_hist != "Todos": mm=mm[mm["País"]==filtro_pais_hist]
+            st.dataframe(mm, use_container_width=True, hide_index=True)
+        with ht3:
+            tt = resumen_trim
+            if filtro_pais_hist != "Todos": tt=tt[tt["País"]==filtro_pais_hist]
+            if filtro_trimestre_hist != "Todos": tt=tt[tt["Trimestre"]==filtro_trimestre_hist]
+            st.dataframe(tt, use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Descargar historial y resúmenes (Excel)", exportar_historial(hist,resumen_mes,resumen_trim,runs_hist), file_name="Historial_Calidad_Datos_MER.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    else:
+        st.info("Todavía no hay errores registrados en el historial.")
+    st.caption(f"Persistencia: {RUTA_HISTORIAL}. Si publicas en un hosting con disco temporal, configura MER_HISTORY_DB en un volumen persistente o una base de datos administrada.")
+except Exception as exc:
+    st.warning(f"Historial no disponible: {exc}")
 
 rows_metrics_global = [
     {"Indicador": DISPLAY_NAMES[k], "Errores": v["errors"], "Chequeos": v["checks"], "% Error": _pct(v["errors"], v["checks"]) }
