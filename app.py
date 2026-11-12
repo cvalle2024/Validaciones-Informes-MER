@@ -13,7 +13,7 @@ from PIL import Image
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
 from pathlib import Path
 from auditoria_tablas import auditar_tablas_excel
@@ -32,7 +32,7 @@ with c_logo:
     st.image(logo_img, width=180)
 with c_title:
     st.title("Centro de Calidad de Datos MER")
-    st.caption("VIHCA  ·  V8  |  Validaciones, historial de errores y resumen trimestral")
+    st.caption("VIHCA  ·  V9  |  Validaciones, historial de errores y resumen trimestral")
 
 # Acceso visible desde el inicio: el historial detallado aparece al final del reporte.
 st.info("🆕 V8 · **Historial de errores y seguimiento trimestral** disponible al final de esta página. Procesa archivos para registrar la primera detección y las reincidencias.")
@@ -2831,7 +2831,46 @@ def _build_resumen_txcurr_por_transicion(df: pd.DataFrame) -> pd.DataFrame:
     resumen = resumen[["País", "Q_Base", "Q_Comparado", "Transición", "Sitios_Evaluados", "Sitios_Con_Error", "Sitios_Que_Cuadran", "%_Error", "Brecha_Neta", "Brecha_Absoluta"]]
     return resumen.sort_values(["País", "Q_Base", "Q_Comparado", "Transición"]).reset_index(drop=True)
 
-def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df_metricas_group: pd.DataFrame) -> bytes:
+def _hojas_historial_exportacion(writer, used, filtrado=False):
+    """Incorpora el historial a cada Excel general sin modificar la base de datos."""
+    hist, mensual, trimestral, ejecuciones = tablas_historial()
+    if filtrado and not hist.empty:
+        # El archivo FILTRADO aplica selección actual de país y sitio también al historial.
+        pais = st.session_state.get("sel_pais", "Todos")
+        sitio = st.session_state.get("sel_sitio", "Todos")
+        if pais != "Todos":
+            norm = lambda v: str(v).replace("_", " ").strip().casefold()
+            hist = hist[hist["País"].map(norm) == norm(pais)].copy()
+        if sitio != "Todos":
+            norm = lambda v: str(v).replace("_", " ").strip().casefold()
+            hist = hist[hist["Sitio"].map(norm) == norm(sitio)].copy()
+        # Se recalculan los agregados a partir de las filas históricas filtradas.
+        mensual, trimestral = resumir_historial_dataframe(hist)
+        # Tabla Ejecuciones original no contiene run_id: para evitar una falsa
+        # equivalencia, no incluimos ejecuciones de otros países en FILTRADO.
+        ejecuciones = pd.DataFrame(columns=ejecuciones.columns)
+    for nombre, tabla in [
+        ("Historial_Errores", hist.drop(columns=["Clave", "Ejecución"], errors="ignore")),
+        ("Historico_Mensual", mensual),
+        ("Historico_Trimestral", trimestral),
+        ("Ejecuciones_Historico", ejecuciones),
+    ]:
+        tabla.to_excel(writer, index=False, sheet_name=_safe_sheet_name(nombre, used))
+
+
+def resumir_historial_dataframe(hist):
+    """Agrega historial filtrado sin contar de más errores distintos."""
+    if hist.empty:
+        return (pd.DataFrame(columns=["Mes", "País", "Tipo de error", "Detecciones", "Errores_distintos", "Reincidencias", "Archivos"]),
+                pd.DataFrame(columns=["Año fiscal", "Trimestre", "País", "Tipo de error", "Detecciones", "Errores_distintos", "Reincidencias", "Archivos"]))
+    agg = dict(Detecciones=("Clave", "size"), Errores_distintos=("Clave", "nunique"),
+               Reincidencias=("N° detección", lambda v: (v > 1).sum()), Archivos=("Archivo", "nunique"))
+    mensual = hist.groupby(["Mes", "País", "Tipo de error"], dropna=False).agg(**agg).reset_index()
+    trimestral = hist.groupby(["Año fiscal", "Trimestre", "País", "Tipo de error"], dropna=False).agg(**agg).reset_index()
+    return mensual, trimestral
+
+
+def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df_metricas_group: pd.DataFrame, filtrado: bool = False) -> bytes:
     # Soporta uno o varios campos por hoja a resaltar (lista o string)
     config_resaltado = {
         "Numerador > Denominador": "Numerador",
@@ -2871,6 +2910,8 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
             df_metricas_global.to_excel(writer, index=False, sheet_name=_safe_sheet_name("Metricas Globales Seleccion", used))
         if df_metricas_group is not None and not df_metricas_group.empty:
             df_metricas_group.to_excel(writer, index=False, sheet_name=_safe_sheet_name("Metricas por Mes", used))
+        # Incluye siempre estas cuatro hojas, también cuando todavía no hay historial.
+        _hojas_historial_exportacion(writer, used, filtrado=filtrado)
 
     buffer.seek(0); wb = load_workbook(buffer)
     rojo = PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid")
@@ -2896,6 +2937,19 @@ def exportar_excel_resultados(errores_dict, df_metricas_global: pd.DataFrame, df
                         ws.cell(row=row, column=col_idx).fill = rojo
         ws.auto_filter.ref = ws.dimensions
 
+    # Formato para las cuatro hojas nuevas de seguimiento.
+    for ws in wb.worksheets:
+        if ws.title not in {"Historial_Errores", "Historico_Mensual", "Historico_Trimestral", "Ejecuciones_Historico"}:
+            continue
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        for celda in ws[1]:
+            celda.font = Font(name="Aptos", bold=True, color="FFFFFF")
+            celda.fill = PatternFill(fill_type="solid", fgColor="176B83")
+        for col in ws.columns:
+            col_vals = list(col)
+            longest = max((len(str(c.value or "")) for c in col_vals[:100]), default=10)
+            ws.column_dimensions[col_vals[0].column_letter].width = min(40, max(14, longest + 2))
     out = io.BytesIO(); wb.save(out); out.seek(0)
     return out.getvalue()
 
@@ -3020,7 +3074,7 @@ filt_dict = {
     "Conciliación TX_CURR trimestral": df_txcurr_cohorte_export_f,
     "Auditoria_Sitio TX_CURR": df_txcurr_auditoria_export_f,
 }
-bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel)
+bytes_excel_filt = exportar_excel_resultados(filt_dict, df_metricas_global_sel, df_metricas_por_mes_sel, filtrado=True)
 
 fecha_str = datetime.now().strftime("%Y%m%d_%H%M")
 # Fix menor para evitar NameError si 'pais' no existe en este contexto:
@@ -3028,10 +3082,11 @@ pais = st.session_state.get("sel_pais", default_pais)  # (no afecta validaciones
 
 dl = st.container(border=True)
 with dl:
+    st.caption("Ambas descargas incluyen Historial_Errores, Historico_Mensual, Historico_Trimestral y Ejecuciones_Historico. El archivo filtrado limita el historial al país y sitio seleccionados; conserva todas las ejecuciones únicamente en el archivo completo.")
     cdl1, cdl2 = st.columns(2)
     with cdl1:
         st.download_button(
-            "⬇️ Descargar Excel (COMPLETO)",
+            "⬇️ Descargar Excel (COMPLETO + HISTORIAL)",
             data=bytes_excel_full,
             file_name=f"Errores_validaciones_{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3039,7 +3094,7 @@ with dl:
         )
     with cdl2:
         st.download_button(
-            "⬇️ Descargar Excel (FILTRADO)",
+            "⬇️ Descargar Excel (FILTRADO + HISTORIAL)",
             data=bytes_excel_filt,
             file_name=f"Errores_validaciones_{pais}_{fecha_str}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

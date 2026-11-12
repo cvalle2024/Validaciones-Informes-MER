@@ -32,3 +32,12 @@ La base comienza vacía: los reportes Excel antiguos no se importan automáticam
 - Si trabajas en Streamlit Community Cloud/GitHub, debes subir o desplegar los archivos actualizados del ZIP en el repositorio asociado y reiniciar la app. Descargar el ZIP por sí solo NO modifica una web publicada.
 - El resumen de historial está **al final de la página principal**, debajo de los resultados del validador. Se puede desplazar hasta el final; aun con la base vacía, aparecerá el título y el mensaje de que no hay registros.
 - Si ejecutas localmente, extrae el ZIP completo en otra carpeta y ejecuta desde esa carpeta, para evitar abrir archivos antiguos por error.
+
+## Corrección V9: historial en el Excel principal
+Los botones **Descargar Excel (COMPLETO + HISTORIAL)** y **Descargar Excel (FILTRADO + HISTORIAL)** incluyen automáticamente cuatro nuevas hojas:
+- `Historial_Errores`: registros históricos, fecha de primera detección y número de detección (1, 2, 3...).
+- `Historico_Mensual`: detecciones, errores distintos, reincidencias y archivos por mes, país y tipo.
+- `Historico_Trimestral`: los mismos indicadores por trimestre fiscal MER (octubre-septiembre).
+- `Ejecuciones_Historico`: fecha y volumen de cada corrida (en el Excel COMPLETO; queda sin filas en el FILTRADO porque el registro de ejecuciones no incluye el detalle de país/sitio).
+El archivo FILTRADO limita los hallazgos históricos al país/sitio seleccionados y recalcula los resúmenes de las filas filtradas. Ambas modalidades agregan las hojas aunque el historial todavía esté vacío. El botón independiente **Descargar historial y resúmenes (Excel)** se conserva.
+**Nota:** Actualizar archivos Python no transfiere el contenido de una base SQLite previa. Preserve `data/historial_mer.sqlite3` donde corresponda o configure `MER_HISTORY_DB` apuntando al almacenamiento persistente de su instalación.
