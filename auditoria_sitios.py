@@ -20,7 +20,7 @@ def base(s):
     return ''.join(c for c in unicodedata.normalize('NFKD', str(s).casefold()) if not unicodedata.combining(c))
 
 def suave(s):
-    return re.sub(r'\s+', ' ', base(s).strip())
+    return re.sub(r'\s+', ' ', base(s).replace('_', ' ').replace('-', ' ').replace('\u00a0', ' ').strip())
 
 def detectar(headers, opciones):
     for opcion in opciones:
@@ -65,13 +65,21 @@ def auditar_sitios_excel(entradas):
                     if valor is None or not str(valor).strip():
                         continue
                     sitio = str(valor)
+                    # Encabezados repetidos dentro del cuerpo NO son establecimientos.
+                    if suave(sitio) in {suave(x) for x in SITIO_COLUMNAS}:
+                        continue
                     pais = str(row[ip]).strip() if ip is not None and ip < len(row) and row[ip] is not None else ''
                     depto = str(row[idep]).strip() if idep is not None and idep < len(row) and row[idep] is not None else ''
                     clave = (sitio, suave(pais))
                     if clave in vistos:
                         continue
                     vistos.add(clave)
-                    candidatos = por_pais.get(suave(pais), []) if pais else CATALOGO
+                    candidatos = por_pais.get(suave(pais), []) if pais else []
+                    # Un país ausente o no reconocido no autoriza adjudicar nombres
+                    # del catálogo de otro país.
+                    if not candidatos:
+                        filas.append([archivo,ruta,ws.title,num,pais,depto,columnas[ix],sitio,'','','PAÍS NO RECONOCIDO','Revisar el nombre de país reportado; no se comparó contra otro país.'])
+                        continue
                     iguales = [r for r in candidatos if r['sitio'] == sitio]
                     if iguales:
                         estado, sugerido, pais_oficial, detalle = 'CORRECTO',sitio,iguales[0]['pais'],'Coincidencia exacta con el catálogo oficial.'
